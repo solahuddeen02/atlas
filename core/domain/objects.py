@@ -77,3 +77,35 @@ def list_objects():
         }
         for row in rows
     ]
+
+def list_objects(
+    obj_type: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    query = "SELECT id, type, name, storage_key FROM objects"
+    params = []
+
+    if obj_type:
+        query += " WHERE type=?"
+        params.append(obj_type)
+
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "type": row[1],
+            "name": row[2],
+            "storage": row[3],
+        }
+        for row in rows
+    ]

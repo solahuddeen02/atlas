@@ -42,5 +42,13 @@ def download_object(obj_id: int):
     )
 
 @router.get("/objects")
-def list_objects_api():
-    return list_objects()
+def list_objects_api(
+    obj_type: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    return list_objects(
+        obj_type=obj_type,
+        limit=limit,
+        offset=offset,
+    )
