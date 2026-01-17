@@ -58,3 +58,22 @@ def get_object(obj_id: int):
         "name": row[2],
         "storage": row[3],
     }
+
+def list_objects():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, type, name, storage_key FROM objects ORDER BY id DESC"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "type": row[1],
+            "name": row[2],
+            "storage": row[3],
+        }
+        for row in rows
+    ]

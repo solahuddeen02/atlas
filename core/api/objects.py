@@ -4,7 +4,7 @@ from core.storage.local import save_file
 
 from fastapi.responses import FileResponse
 from core.domain.objects import get_object
-
+from core.domain.objects import list_objects
 
 router = APIRouter()
 
@@ -41,3 +41,6 @@ def download_object(obj_id: int):
         media_type="application/octet-stream"
     )
 
+@router.get("/objects")
+def list_objects_api():
+    return list_objects()
