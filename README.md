@@ -44,12 +44,13 @@ Each object contains:
 
 atlas/
 ├── core/
-│ ├── api/ # HTTP endpoints
-│ ├── domain/ # core business logic
-│ ├── storage/ # storage backends
-│ └── db/ # database utilities
-├── data/ # runtime file storage (ignored by git)
-├── atlas.db # local database (ignored by git)
+│   ├── api/        # HTTP endpoints (FastAPI routers)
+│   ├── domain/     # Core business logic (object model, rules)
+│   ├── storage/    # Storage backends (local, future S3/MinIO)
+│   └── db/         # Database utilities (connections, migrations)
+│
+├── data/           # Runtime file storage (ignored by git)
+├── atlas.db        # Local metadata database (ignored by git)
 ├── README.md
 └── .gitignore
 
