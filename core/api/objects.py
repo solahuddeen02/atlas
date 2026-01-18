@@ -15,6 +15,7 @@ from core.domain.objects import (
     soft_delete_object,
     restore_object,
     trash_object,
+    trash_object_recursive,
 )
 from core.storage.local import save_file
 from datetime import datetime
@@ -141,3 +142,7 @@ def delete_object(obj_id: int):
     trash_object(obj_id)
     return {"status": "trashed", "id": obj_id}
 
+@router.delete("/objects/{obj_id}")
+def delete_object(obj_id: int):
+    trash_object_recursive(obj_id)
+    return {"status": "trashed", "id": obj_id}

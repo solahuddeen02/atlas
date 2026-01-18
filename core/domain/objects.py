@@ -345,3 +345,38 @@ def trash_object(obj_id: int):
 
     conn.commit()
     conn.close()
+
+def get_children_ids(parent_id: int) -> list[int]:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT id FROM objects WHERE parent_id = ? AND deleted_at IS NULL",
+        (parent_id,),
+    )
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [r[0] for r in rows]
+
+def trash_object_recursive(obj_id: int):
+    now = datetime.utcnow().isoformat()
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # mark self
+    cur.execute(
+        "UPDATE objects SET deleted_at=? WHERE id=?",
+        (now, obj_id),
+    )
+
+    conn.commit()
+    conn.close()
+
+    # find children
+    children = get_children_ids(obj_id)
+
+    for child_id in children:
+        trash_object_recursive(child_id)
