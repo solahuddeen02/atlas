@@ -127,3 +127,32 @@ def attach_metadata(obj_id: int, size: int, mime_type: str, created_at: str):
     )
     conn.commit()
     conn.close()
+
+def list_photos(limit: int = 20, offset: int = 0):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, type, name, storage_key, size, mime_type, created_at
+        FROM objects
+        WHERE mime_type LIKE 'image/%'
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "type": "photo",
+            "name": row[2],
+            "storage": row[3],
+            "size": row[4],
+            "mime_type": row[5],
+            "created_at": row[6],
+        }
+        for row in rows
+    ]

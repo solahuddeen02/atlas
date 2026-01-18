@@ -6,6 +6,7 @@ from core.domain.objects import (
     attach_metadata,
     list_objects,
     get_object,
+    list_photos,
 )
 
 from core.storage.local import save_file
@@ -63,3 +64,7 @@ def list_objects_api(
         limit=limit,
         offset=offset,
     )
+
+@router.get("/photos")
+def list_photos_api(limit: int = 20, offset: int = 0):
+    return list_photos(limit, offset)
