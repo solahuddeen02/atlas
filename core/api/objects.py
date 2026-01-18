@@ -11,6 +11,10 @@ from core.domain.objects import (
     create_folder,
     list_folder,
     move_object,
+    list_trash,
+    soft_delete_object,
+    restore_object,
+    trash_object,
 )
 from core.storage.local import save_file
 from datetime import datetime
@@ -117,3 +121,23 @@ def move_object_api(
         "new_parent_id": new_parent_id,
         "status": "moved",
     }
+
+@router.get("/trash")
+def list_trash_api(limit: int = 20, offset: int = 0):
+    return list_trash(limit, offset)
+
+@router.post("/objects/{obj_id}/delete")
+def delete_object_api(obj_id: int):
+    soft_delete_object(obj_id)
+    return {"id": obj_id, "status": "trashed"}
+
+@router.post("/objects/{obj_id}/restore")
+def restore_object_api(obj_id: int):
+    restore_object(obj_id)
+    return {"id": obj_id, "status": "restored"}
+
+@router.delete("/objects/{obj_id}")
+def delete_object(obj_id: int):
+    trash_object(obj_id)
+    return {"status": "trashed", "id": obj_id}
+
