@@ -330,22 +330,6 @@ def list_trash(limit: int = 20, offset: int = 0):
         for r in rows
     ]
 
-def trash_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        UPDATE objects
-        SET deleted_at = ?
-        WHERE id = ?
-        """,
-        (datetime.utcnow().isoformat(), obj_id),
-    )
-
-    conn.commit()
-    conn.close()
-
 def get_children_ids(parent_id: int) -> list[int]:
     conn = get_connection()
     cur = conn.cursor()
