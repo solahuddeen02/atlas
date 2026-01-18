@@ -7,6 +7,7 @@ from core.domain.objects import (
     list_objects,
     get_object,
     list_photos,
+    list_drive_objects,
 )
 
 from core.storage.local import save_file
@@ -68,3 +69,7 @@ def list_objects_api(
 @router.get("/photos")
 def list_photos_api(limit: int = 20, offset: int = 0):
     return list_photos(limit, offset)
+
+@router.get("/drive")
+def list_drive_api(limit: int = 20, offset: int = 0):
+    return list_drive_objects(limit, offset)
