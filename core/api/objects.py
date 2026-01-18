@@ -67,9 +67,17 @@ def list_objects_api(
     )
 
 @router.get("/photos")
-def list_photos_api(limit: int = 20, offset: int = 0):
-    return list_photos(limit, offset)
+def list_photos_api(
+    limit: int = 20,
+    offset: int = 0,
+    q: str | None = None,
+):
+    return list_photos(limit, offset, q)
 
 @router.get("/drive")
-def list_drive_api(limit: int = 20, offset: int = 0):
-    return list_drive_objects(limit, offset)
+def list_drive_api(
+    limit: int = 20,
+    offset: int = 0,
+    q: str | None = None,
+):
+    return list_drive_objects(limit, offset, q)

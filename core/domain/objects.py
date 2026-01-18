@@ -128,19 +128,32 @@ def attach_metadata(obj_id: int, size: int, mime_type: str, created_at: str):
     conn.commit()
     conn.close()
 
-def list_photos(limit: int = 20, offset: int = 0):
+def list_photos(
+    limit: int = 20,
+    offset: int = 0,
+    q: str | None = None,
+):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
+
+    query = """
         SELECT id, type, name, storage_key, size, mime_type, created_at
         FROM objects
         WHERE mime_type LIKE 'image/%'
+    """
+    params = []
+
+    if q:
+        query += " AND name LIKE ?"
+        params.append(f"%{q}%")
+
+    query += """
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    )
+    """
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
 
@@ -157,19 +170,33 @@ def list_photos(limit: int = 20, offset: int = 0):
         for row in rows
     ]
 
-def list_drive_objects(limit: int = 20, offset: int = 0):
+
+def list_drive_objects(
+    limit: int = 20,
+    offset: int = 0,
+    q: str | None = None,
+):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
+
+    query = """
         SELECT id, type, name, storage_key, size, mime_type, created_at
         FROM objects
         WHERE type = 'file'
+    """
+    params = []
+
+    if q:
+        query += " AND name LIKE ?"
+        params.append(f"%{q}%")
+
+    query += """
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    )
+    """
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
 
