@@ -5,17 +5,18 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS objects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL,
-        name TEXT NOT NULL,
-        storage_key TEXT,
-        created_at TEXT NOT NULL
-    )
+        CREATE TABLE IF NOT EXISTS objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            storage_key TEXT,
+            size INTEGER,
+            mime_type TEXT,
+            created_at TEXT
+        )
     """)
     conn.commit()
     conn.close()
-
 
 def create_object(obj_type: str, name: str):
     conn = get_connection()
@@ -86,7 +87,7 @@ def list_objects(
     conn = get_connection()
     cur = conn.cursor()
 
-    query = "SELECT id, type, name, storage_key FROM objects"
+    query = "SELECT id, type, name, storage_key, size, mime_type, created_at FROM objects"
     params = []
 
     if obj_type:
@@ -101,11 +102,28 @@ def list_objects(
     conn.close()
 
     return [
-        {
-            "id": row[0],
-            "type": row[1],
-            "name": row[2],
-            "storage": row[3],
-        }
-        for row in rows
-    ]
+    {
+        "id": row[0],
+        "type": row[1],
+        "name": row[2],
+        "storage": row[3],
+        "size": row[4],
+        "mime_type": row[5],
+        "created_at": row[6],
+    }
+    for row in rows
+]
+
+def attach_metadata(obj_id: int, size: int, mime_type: str, created_at: str):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE objects
+        SET size=?, mime_type=?, created_at=?
+        WHERE id=?
+        """,
+        (size, mime_type, created_at, obj_id)
+    )
+    conn.commit()
+    conn.close()

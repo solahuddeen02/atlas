@@ -1,10 +1,16 @@
 from fastapi import APIRouter, UploadFile, File
-from core.domain.objects import create_object, attach_storage
-from core.storage.local import save_file
-
 from fastapi.responses import FileResponse
-from core.domain.objects import get_object
-from core.domain.objects import list_objects
+from core.domain.objects import (
+    create_object,
+    attach_storage,
+    attach_metadata,
+    list_objects,
+    get_object,
+)
+
+from core.storage.local import save_file
+from datetime import datetime
+
 
 router = APIRouter()
 
@@ -14,20 +20,25 @@ def upload_object(
     name: str,
     file: UploadFile = File(...)
 ):
-    # 1. create object
     obj_id = create_object(obj_type, name)
 
-    # 2. save file
     path = save_file(obj_id, file.file)
 
-    # 3. update storage ref
+    size = file.size
+    mime_type = file.content_type
+    created_at = datetime.utcnow().isoformat()
+
     attach_storage(obj_id, path)
+    attach_metadata(obj_id, size, mime_type, created_at)
 
     return {
         "id": obj_id,
         "name": name,
-        "storage": path
+        "size": size,
+        "mime_type": mime_type,
+        "created_at": created_at,
     }
+
 
 @router.get("/objects/{obj_id}/download")
 def download_object(obj_id: int):
