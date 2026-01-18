@@ -271,3 +271,18 @@ def list_folder(folder_id: int | None):
         for r in rows
     ]
 
+def move_object(obj_id: int, new_parent_id: int | None):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        UPDATE objects
+        SET parent_id = ?
+        WHERE id = ?
+        """,
+        (new_parent_id, obj_id),
+    )
+
+    conn.commit()
+    conn.close()

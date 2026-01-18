@@ -10,6 +10,7 @@ from core.domain.objects import (
     list_drive_objects,
     create_folder,
     list_folder,
+    move_object,
 )
 from core.storage.local import save_file
 from datetime import datetime
@@ -104,3 +105,15 @@ def list_folder_api(folder_id: int):
 @router.get("/drive/root")
 def drive_root():
     return list_folder(None)
+
+@router.post("/objects/{obj_id}/move")
+def move_object_api(
+    obj_id: int,
+    new_parent_id: int | None = None,
+):
+    move_object(obj_id, new_parent_id)
+    return {
+        "id": obj_id,
+        "new_parent_id": new_parent_id,
+        "status": "moved",
+    }
