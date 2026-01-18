@@ -9,6 +9,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
             name TEXT NOT NULL,
+            parent_id INTEGER,
             storage_key TEXT,
             size INTEGER,
             mime_type TEXT,
@@ -18,12 +19,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-def create_object(obj_type: str, name: str):
+def create_object(obj_type: str, name: str, parent_id: int | None = None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO objects (type, name, created_at) VALUES (?, ?, ?)",
-        (obj_type, name, datetime.utcnow().isoformat())
+        """
+        INSERT INTO objects (type, name, parent_id)
+        VALUES (?, ?, ?)
+        """,
+        (obj_type, name, parent_id),
     )
     obj_id = cur.lastrowid
     conn.commit()
@@ -212,3 +216,58 @@ def list_drive_objects(
         }
         for row in rows
     ]
+
+def create_folder(name: str, parent_id: int | None = None):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO objects (type, name, parent_id, created_at)
+        VALUES ('folder', ?, ?, datetime('now'))
+        """,
+        (name, parent_id),
+    )
+    folder_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return folder_id
+
+def list_folder(folder_id: int | None):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if folder_id is None:
+        cur.execute(
+            """
+            SELECT id, type, name, size, mime_type, created_at
+            FROM objects
+            WHERE parent_id IS NULL
+            ORDER BY type DESC, name
+            """
+        )
+    else:
+        cur.execute(
+            """
+            SELECT id, type, name, size, mime_type, created_at
+            FROM objects
+            WHERE parent_id = ?
+            ORDER BY type DESC, name
+            """,
+            (folder_id,),
+        )
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": r[0],
+            "type": r[1],
+            "name": r[2],
+            "size": r[3],
+            "mime_type": r[4],
+            "created_at": r[5],
+        }
+        for r in rows
+    ]
+

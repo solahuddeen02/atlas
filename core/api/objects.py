@@ -8,8 +8,9 @@ from core.domain.objects import (
     get_object,
     list_photos,
     list_drive_objects,
+    create_folder,
+    list_folder,
 )
-
 from core.storage.local import save_file
 from datetime import datetime
 
@@ -20,9 +21,10 @@ router = APIRouter()
 def upload_object(
     obj_type: str,
     name: str,
+    parent_id: int | None = None,
     file: UploadFile = File(...)
 ):
-    obj_id = create_object(obj_type, name)
+    obj_id = create_object(obj_type, name, parent_id)
 
     path = save_file(obj_id, file.file)
 
@@ -81,3 +83,24 @@ def list_drive_api(
     q: str | None = None,
 ):
     return list_drive_objects(limit, offset, q)
+
+@router.post("/folders")
+def create_folder_api(
+    name: str,
+    parent_id: int | None = None,
+):
+    folder_id = create_folder(name, parent_id)
+    return {
+        "id": folder_id,
+        "name": name,
+        "parent_id": parent_id,
+        "type": "folder",
+    }
+
+@router.get("/folders/{folder_id}")
+def list_folder_api(folder_id: int):
+    return list_folder(folder_id)
+
+@router.get("/drive/root")
+def drive_root():
+    return list_folder(None)
