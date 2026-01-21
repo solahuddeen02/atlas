@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from core.domain.objects import (
     trash_object_recursive,
 )
 from core.storage.local import save_file
+import os
 
 router = APIRouter()
 
@@ -36,23 +37,39 @@ def upload_object(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    obj_id = create_object(db, obj_type, name, parent_id)
-
-    path, size = save_file(obj_id, file.file)
-
-    mime_type = file.content_type
+    path = None
     created_at = datetime.utcnow().isoformat()
+    mime_type = file.content_type
 
-    attach_storage(db, obj_id, path)
-    attach_metadata(db, obj_id, size, mime_type, created_at)
+    try:
+        # One transaction for DB actions.
+        with db.begin():
+            obj_id = create_object(db, obj_type, name, parent_id, commit=False)
 
-    return {
-        "id": obj_id,
-        "name": name,
-        "size": size,
-        "mime_type": mime_type,
-        "created_at": created_at,
-    }
+            # file save is outside DB, but we place it inside try and cleanup on failure
+            path, size = save_file(obj_id, file.file)
+
+            attach_storage(db, obj_id, path, commit=False)
+            attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
+
+        return {
+            "id": obj_id,
+            "name": name,
+            "size": size,
+            "mime_type": mime_type,
+            "created_at": created_at,
+        }
+
+    except Exception as e:
+        # DB rollback is handled by db.begin() context manager if exception occurs.
+        # Clean up file if it was written.
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+        raise HTTPException(status_code=500, detail=f"upload failed: {type(e).__name__}")
 
 
 @router.get("/objects/{obj_id}/download")

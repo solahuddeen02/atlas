@@ -23,10 +23,11 @@ def create_object(
     obj_type: str,
     name: str,
     parent_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """
-    Create an object row early so we can attach storage/metadata later.
-    We also set created_at immediately to avoid NULL ordering issues.
+    If commit=False: flush only (so caller can manage a bigger transaction).
     """
     obj = Object(
         type=obj_type,
@@ -35,18 +36,31 @@ def create_object(
         created_at=_utc_iso(),
     )
     db.add(obj)
-    db.commit()
-    db.refresh(obj)
+
+    if commit:
+        db.commit()
+        db.refresh(obj)
+    else:
+        db.flush()       # assign PK without committing
+        db.refresh(obj)  # load obj.id
+
     return obj.id
 
 
-def attach_storage(db: Session, obj_id: int, storage_key: str) -> None:
+def attach_storage(
+    db: Session,
+    obj_id: int,
+    storage_key: str,
+    *,
+    commit: bool = True,
+) -> None:
     db.execute(
         update(Object)
         .where(Object.id == obj_id)
         .values(storage_key=storage_key)
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def attach_metadata(
@@ -55,6 +69,8 @@ def attach_metadata(
     size: int | None,
     mime_type: str | None,
     created_at: str | None,
+    *,
+    commit: bool = True,
 ) -> None:
     db.execute(
         update(Object)
@@ -65,7 +81,8 @@ def attach_metadata(
             created_at=created_at or _utc_iso(),
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def move_object(db: Session, obj_id: int, new_parent_id: int | None) -> None:
