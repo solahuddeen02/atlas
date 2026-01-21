@@ -1,60 +1,107 @@
-from core.db.database import get_connection
+# core/domain/objects.py
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any
 
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS objects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL,
-            name TEXT NOT NULL,
-            parent_id INTEGER,
-            storage_key TEXT,
-            size INTEGER,
-            mime_type TEXT,
-            created_at TEXT,
-            deleted_at TEXT
+from sqlalchemy import and_, desc, select, update
+from sqlalchemy.orm import Session
+
+from core.db.models import Object
+
+
+def _utc_iso() -> str:
+    return datetime.utcnow().isoformat()
+
+
+# -------------------------
+# Create / Update primitives
+# -------------------------
+
+def create_object(
+    db: Session,
+    obj_type: str,
+    name: str,
+    parent_id: int | None = None,
+) -> int:
+    """
+    Create an object row early so we can attach storage/metadata later.
+    We also set created_at immediately to avoid NULL ordering issues.
+    """
+    obj = Object(
+        type=obj_type,
+        name=name,
+        parent_id=parent_id,
+        created_at=_utc_iso(),
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj.id
+
+
+def attach_storage(db: Session, obj_id: int, storage_key: str) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(storage_key=storage_key)
+    )
+    db.commit()
+
+
+def attach_metadata(
+    db: Session,
+    obj_id: int,
+    size: int | None,
+    mime_type: str | None,
+    created_at: str | None,
+) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(
+            size=size,
+            mime_type=mime_type,
+            created_at=created_at or _utc_iso(),
         )
-    """)
-    conn.commit()
-    conn.close()
-
-def create_object(obj_type: str, name: str, parent_id: int | None = None):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO objects (type, name, parent_id)
-        VALUES (?, ?, ?)
-        """,
-        (obj_type, name, parent_id),
     )
-    obj_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return obj_id
+    db.commit()
 
-def attach_storage(obj_id: int, storage_key: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE objects SET storage_key=? WHERE id=?",
-        (storage_key, obj_id)
+
+def move_object(db: Session, obj_id: int, new_parent_id: int | None) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(parent_id=new_parent_id)
     )
-    conn.commit()
-    conn.close()
+    db.commit()
 
-def get_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, type, name, storage_key FROM objects WHERE id=?",
-        (obj_id,)
+
+def soft_delete_object(db: Session, obj_id: int) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(deleted_at=_utc_iso())
     )
-    row = cur.fetchone()
-    conn.close()
+    db.commit()
 
+
+def restore_object(db: Session, obj_id: int) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(deleted_at=None)
+    )
+    db.commit()
+
+
+# -------------------------
+# Read queries
+# -------------------------
+
+def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
+    stmt = select(Object.id, Object.type, Object.name, Object.storage_key).where(Object.id == obj_id)
+    row = db.execute(stmt).one_or_none()
     if not row:
         return None
 
@@ -65,38 +112,34 @@ def get_object(obj_id: int):
         "storage": row[3],
     }
 
+
 def list_objects(
+    db: Session,
     obj_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = []
-    params = []
-
-    # hide trash
-    conditions.append("deleted_at IS NULL")
-
+) -> list[dict[str, Any]]:
+    conditions = [Object.deleted_at.is_(None)]
     if obj_type:
-        conditions.append("type = ?")
-        params.append(obj_type)
+        conditions.append(Object.type == obj_type)
 
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.storage_key,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
 
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -110,50 +153,37 @@ def list_objects(
         for r in rows
     ]
 
-def attach_metadata(obj_id: int, size: int, mime_type: str, created_at: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET size=?, mime_type=?, created_at=?
-        WHERE id=?
-        """,
-        (size, mime_type, created_at, obj_id)
-    )
-    conn.commit()
-    conn.close()
 
 def list_photos(
+    db: Session,
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
+) -> list[dict[str, Any]]:
     conditions = [
-        "mime_type LIKE 'image/%'",
-        "deleted_at IS NULL",
+        Object.deleted_at.is_(None),
+        Object.mime_type.like("image/%"),
     ]
-    params = []
-
     if q:
-        conditions.append("name LIKE ?")
-        params.append(f"%{q}%")
+        conditions.append(Object.name.like(f"%{q}%"))
 
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.storage_key,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -167,33 +197,37 @@ def list_photos(
         for r in rows
     ]
 
+
 def list_drive_objects(
+    db: Session,
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = ["type = 'file'", "deleted_at IS NULL"]
-    params = []
-
+) -> list[dict[str, Any]]:
+    conditions = [
+        Object.deleted_at.is_(None),
+        Object.type == "file",
+    ]
     if q:
-        conditions.append("name LIKE ?")
-        params.append(f"%{q}%")
+        conditions.append(Object.name.like(f"%{q}%"))
 
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.storage_key,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -207,45 +241,42 @@ def list_drive_objects(
         for r in rows
     ]
 
-def create_folder(name: str, parent_id: int | None = None):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO objects (type, name, parent_id, created_at)
-        VALUES ('folder', ?, ?, datetime('now'))
-        """,
-        (name, parent_id),
+
+def create_folder(db: Session, name: str, parent_id: int | None = None) -> int:
+    folder = Object(
+        type="folder",
+        name=name,
+        parent_id=parent_id,
+        created_at=_utc_iso(),
     )
-    folder_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return folder_id
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return folder.id
 
-def list_folder(parent_id: int | None):
-    conn = get_connection()
-    cur = conn.cursor()
 
-    query = """
-        SELECT id, type, name, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = ["deleted_at IS NULL"]
-    params = []
-
+def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
+    conditions = [Object.deleted_at.is_(None)]
     if parent_id is None:
-        conditions.append("parent_id IS NULL")
+        conditions.append(Object.parent_id.is_(None))
     else:
-        conditions.append("parent_id = ?")
-        params.append(parent_id)
+        conditions.append(Object.parent_id == parent_id)
 
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY type DESC, name"
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+        )
+        .where(and_(*conditions))
+        # mimic: ORDER BY type DESC, name
+        .order_by(desc(Object.type), Object.name)
+    )
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -258,68 +289,16 @@ def list_folder(parent_id: int | None):
         for r in rows
     ]
 
-def move_object(obj_id: int, new_parent_id: int | None):
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute(
-        """
-        UPDATE objects
-        SET parent_id = ?
-        WHERE id = ?
-        """,
-        (new_parent_id, obj_id),
+def list_trash(db: Session, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+    stmt = (
+        select(Object.id, Object.type, Object.name, Object.deleted_at)
+        .where(Object.deleted_at.is_not(None))
+        .order_by(desc(Object.deleted_at))
+        .limit(limit)
+        .offset(offset)
     )
-
-    conn.commit()
-    conn.close()
-
-def soft_delete_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET deleted_at = datetime('now')
-        WHERE id = ?
-        """,
-        (obj_id,),
-    )
-    conn.commit()
-    conn.close()
-
-def restore_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET deleted_at = NULL
-        WHERE id = ?
-        """,
-        (obj_id,),
-    )
-    conn.commit()
-    conn.close()
-
-def list_trash(limit: int = 20, offset: int = 0):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT id, type, name, deleted_at
-        FROM objects
-        WHERE deleted_at IS NOT NULL
-        ORDER BY deleted_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    )
-
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -330,37 +309,36 @@ def list_trash(limit: int = 20, offset: int = 0):
         for r in rows
     ]
 
-def get_children_ids(parent_id: int) -> list[int]:
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute(
-        "SELECT id FROM objects WHERE parent_id = ? AND deleted_at IS NULL",
-        (parent_id,),
+# -------------------------
+# Recursive trash
+# -------------------------
+
+def get_children_ids(db: Session, parent_id: int) -> list[int]:
+    stmt = select(Object.id).where(
+        and_(
+            Object.parent_id == parent_id,
+            Object.deleted_at.is_(None),
+        )
     )
-
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [r[0] for r in rows]
 
-def trash_object_recursive(obj_id: int):
-    now = datetime.utcnow().isoformat()
 
-    conn = get_connection()
-    cur = conn.cursor()
+def trash_object_recursive(db: Session, obj_id: int) -> None:
+    """
+    Mark object and all descendants as deleted.
+    Uses the same DB session throughout recursion (much faster than reconnecting).
+    """
+    now = _utc_iso()
 
-    # mark self
-    cur.execute(
-        "UPDATE objects SET deleted_at=? WHERE id=?",
-        (now, obj_id),
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(deleted_at=now)
     )
+    db.commit()
 
-    conn.commit()
-    conn.close()
-
-    # find children
-    children = get_children_ids(obj_id)
-
+    children = get_children_ids(db, obj_id)
     for child_id in children:
-        trash_object_recursive(child_id)
+        trash_object_recursive(db, child_id)
