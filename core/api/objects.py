@@ -38,10 +38,8 @@ def upload_object(
 ):
     obj_id = create_object(db, obj_type, name, parent_id)
 
-    path = save_file(obj_id, file.file)
+    path, size = save_file(obj_id, file.file)
 
-    # NOTE: UploadFile.size is not guaranteed; kept for backward-compat.
-    size = getattr(file, "size", None)
     mime_type = file.content_type
     created_at = datetime.utcnow().isoformat()
 
