@@ -22,6 +22,7 @@ from core.domain.objects import (
     move_object,
     restore_object,
     trash_object_recursive,
+    set_status,
 )
 from core.storage.local import save_file
 import os
@@ -52,6 +53,9 @@ def upload_object(
             attach_storage(db, obj_id, path, commit=False)
             attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
 
+            set_status(db, obj_id, "ready", commit=False)
+
+
         return {
             "id": obj_id,
             "name": name,
@@ -65,7 +69,7 @@ def upload_object(
         # Clean up file if it was written.
         if path and os.path.exists(path):
             try:
-                os.remove(path)
+                set_status(db, obj_id, "failed", commit=True)
             except Exception:
                 pass
 

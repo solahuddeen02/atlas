@@ -34,6 +34,7 @@ def create_object(
         name=name,
         parent_id=parent_id,
         created_at=_utc_iso(),
+        status="uploading",
     )
     db.add(obj)
 
@@ -45,6 +46,14 @@ def create_object(
         db.refresh(obj)  # load obj.id
 
     return obj.id
+
+
+def set_status(db: Session, obj_id: int, status: str, *, commit: bool = True) -> None:
+    db.execute(
+        update(Object).where(Object.id == obj_id).values(status=status)
+    )
+    if commit:
+        db.commit()
 
 
 def attach_storage(
