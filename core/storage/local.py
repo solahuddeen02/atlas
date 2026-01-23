@@ -1,3 +1,4 @@
+# core/storage/local.py
 from __future__ import annotations
 
 import os
@@ -31,11 +32,11 @@ def save_file(obj_id: int, src: BinaryIO) -> Tuple[str, int]:
                 f.write(chunk)
                 size += len(chunk)
 
-        os.replace(tmp_path, final_path)  # atomic rename/replace
+        os.replace(tmp_path, final_path)
         return str(final_path), size
 
     except Exception:
-        # cleanup temp if any failure
+        # Cleanup temp file on failure
         try:
             if tmp_path.exists():
                 tmp_path.unlink()

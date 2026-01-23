@@ -1,9 +1,10 @@
 # core/api/objects.py
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -21,11 +22,10 @@ from core.domain.objects import (
     list_trash,
     move_object,
     restore_object,
-    trash_object_recursive,
     set_status,
+    trash_object_recursive,
 )
 from core.storage.local import save_file
-import os
 
 router = APIRouter()
 
@@ -39,22 +39,22 @@ def upload_object(
     db: Session = Depends(get_db),
 ):
     path = None
+    obj_id: int | None = None
+
     created_at = datetime.utcnow().isoformat()
     mime_type = file.content_type
 
     try:
-        # One transaction for DB actions.
+        # One transaction for DB changes.
         with db.begin():
             obj_id = create_object(db, obj_type, name, parent_id, commit=False)
 
-            # file save is outside DB, but we place it inside try and cleanup on failure
+            # Save file (may raise); if it fails we rollback DB and nothing persists
             path, size = save_file(obj_id, file.file)
 
             attach_storage(db, obj_id, path, commit=False)
             attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
-
             set_status(db, obj_id, "ready", commit=False)
-
 
         return {
             "id": obj_id,
@@ -62,12 +62,20 @@ def upload_object(
             "size": size,
             "mime_type": mime_type,
             "created_at": created_at,
+            "status": "ready",
         }
 
     except Exception as e:
-        # DB rollback is handled by db.begin() context manager if exception occurs.
+        # db.begin() rolls back automatically on exception.
         # Clean up file if it was written.
         if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+        # Best-effort mark failed if obj_id exists and session can still talk
+        if obj_id is not None:
             try:
                 set_status(db, obj_id, "failed", commit=True)
             except Exception:
@@ -139,6 +147,7 @@ def create_folder_api(
         "name": name,
         "parent_id": parent_id,
         "type": "folder",
+        "status": "ready",
     }
 
 

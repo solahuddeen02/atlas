@@ -27,7 +27,8 @@ def create_object(
     commit: bool = True,
 ) -> int:
     """
-    If commit=False: flush only (so caller can manage a bigger transaction).
+    Create an object row early so we can attach storage/metadata later.
+    status starts as 'uploading' for atomic upload flow.
     """
     obj = Object(
         type=obj_type,
@@ -43,17 +44,9 @@ def create_object(
         db.refresh(obj)
     else:
         db.flush()       # assign PK without committing
-        db.refresh(obj)  # load obj.id
+        db.refresh(obj)  # ensure obj.id available
 
     return obj.id
-
-
-def set_status(db: Session, obj_id: int, status: str, *, commit: bool = True) -> None:
-    db.execute(
-        update(Object).where(Object.id == obj_id).values(status=status)
-    )
-    if commit:
-        db.commit()
 
 
 def attach_storage(
@@ -94,6 +87,22 @@ def attach_metadata(
         db.commit()
 
 
+def set_status(
+    db: Session,
+    obj_id: int,
+    status: str,
+    *,
+    commit: bool = True,
+) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(status=status)
+    )
+    if commit:
+        db.commit()
+
+
 def move_object(db: Session, obj_id: int, new_parent_id: int | None) -> None:
     db.execute(
         update(Object)
@@ -126,7 +135,14 @@ def restore_object(db: Session, obj_id: int) -> None:
 # -------------------------
 
 def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
-    stmt = select(Object.id, Object.type, Object.name, Object.storage_key).where(Object.id == obj_id)
+    stmt = select(
+        Object.id,
+        Object.type,
+        Object.name,
+        Object.storage_key,
+        Object.status,
+    ).where(Object.id == obj_id)
+
     row = db.execute(stmt).one_or_none()
     if not row:
         return None
@@ -136,6 +152,7 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         "type": row[1],
         "name": row[2],
         "storage": row[3],
+        "status": row[4],
     }
 
 
@@ -145,7 +162,10 @@ def list_objects(
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    conditions = [Object.deleted_at.is_(None)]
+    conditions = [
+        Object.deleted_at.is_(None),
+        Object.status == "ready",  # hide incomplete uploads by default
+    ]
     if obj_type:
         conditions.append(Object.type == obj_type)
 
@@ -158,6 +178,7 @@ def list_objects(
             Object.size,
             Object.mime_type,
             Object.created_at,
+            Object.status,
         )
         .where(and_(*conditions))
         .order_by(desc(Object.created_at))
@@ -175,6 +196,7 @@ def list_objects(
             "size": r[4],
             "mime_type": r[5],
             "created_at": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
@@ -188,6 +210,7 @@ def list_photos(
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
+        Object.status == "ready",
         Object.mime_type.like("image/%"),
     ]
     if q:
@@ -202,6 +225,7 @@ def list_photos(
             Object.size,
             Object.mime_type,
             Object.created_at,
+            Object.status,
         )
         .where(and_(*conditions))
         .order_by(desc(Object.created_at))
@@ -219,6 +243,7 @@ def list_photos(
             "size": r[4],
             "mime_type": r[5],
             "created_at": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
@@ -232,6 +257,7 @@ def list_drive_objects(
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
+        Object.status == "ready",
         Object.type == "file",
     ]
     if q:
@@ -246,6 +272,7 @@ def list_drive_objects(
             Object.size,
             Object.mime_type,
             Object.created_at,
+            Object.status,
         )
         .where(and_(*conditions))
         .order_by(desc(Object.created_at))
@@ -263,6 +290,7 @@ def list_drive_objects(
             "size": r[4],
             "mime_type": r[5],
             "created_at": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
@@ -274,6 +302,7 @@ def create_folder(db: Session, name: str, parent_id: int | None = None) -> int:
         name=name,
         parent_id=parent_id,
         created_at=_utc_iso(),
+        status="ready",
     )
     db.add(folder)
     db.commit()
@@ -282,7 +311,10 @@ def create_folder(db: Session, name: str, parent_id: int | None = None) -> int:
 
 
 def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
-    conditions = [Object.deleted_at.is_(None)]
+    conditions = [
+        Object.deleted_at.is_(None),
+        Object.status == "ready",
+    ]
     if parent_id is None:
         conditions.append(Object.parent_id.is_(None))
     else:
@@ -296,9 +328,9 @@ def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
             Object.size,
             Object.mime_type,
             Object.created_at,
+            Object.status,
         )
         .where(and_(*conditions))
-        # mimic: ORDER BY type DESC, name
         .order_by(desc(Object.type), Object.name)
     )
 
@@ -311,6 +343,7 @@ def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
             "size": r[3],
             "mime_type": r[4],
             "created_at": r[5],
+            "status": r[6],
         }
         for r in rows
     ]
@@ -318,7 +351,7 @@ def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
 
 def list_trash(db: Session, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
     stmt = (
-        select(Object.id, Object.type, Object.name, Object.deleted_at)
+        select(Object.id, Object.type, Object.name, Object.deleted_at, Object.status)
         .where(Object.deleted_at.is_not(None))
         .order_by(desc(Object.deleted_at))
         .limit(limit)
@@ -331,6 +364,7 @@ def list_trash(db: Session, limit: int = 20, offset: int = 0) -> list[dict[str, 
             "type": r[1],
             "name": r[2],
             "deleted_at": r[3],
+            "status": r[4],
         }
         for r in rows
     ]
@@ -345,6 +379,7 @@ def get_children_ids(db: Session, parent_id: int) -> list[int]:
         and_(
             Object.parent_id == parent_id,
             Object.deleted_at.is_(None),
+            Object.status == "ready",
         )
     )
     rows = db.execute(stmt).all()
@@ -354,7 +389,7 @@ def get_children_ids(db: Session, parent_id: int) -> list[int]:
 def trash_object_recursive(db: Session, obj_id: int) -> None:
     """
     Mark object and all descendants as deleted.
-    Uses the same DB session throughout recursion (much faster than reconnecting).
+    Uses the same DB session throughout recursion.
     """
     now = _utc_iso()
 
