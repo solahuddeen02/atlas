@@ -1,6 +1,7 @@
 # core/domain/objects.py
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -403,3 +404,72 @@ def trash_object_recursive(db: Session, obj_id: int) -> None:
     children = get_children_ids(db, obj_id)
     for child_id in children:
         trash_object_recursive(db, child_id)
+
+
+# -------------------------
+# Phase 7A.4: Startup recovery
+# -------------------------
+
+def recover_incomplete_uploads(db: Session, data_dir: str) -> dict[str, int]:
+    """
+    Recovery policy (safe default):
+    - Find objects stuck in status='uploading'
+    - If a file exists for them, delete it (assume incomplete)
+    - Mark object as status='failed' and clear storage/metadata fields
+    - Delete leftover temp files ".<id>.tmp"
+
+    Returns counts for logging/visibility.
+    """
+    recovered = 0
+    deleted_files = 0
+    deleted_tmps = 0
+
+    # 1) Cleanup temp files first
+    try:
+        if os.path.isdir(data_dir):
+            for name in os.listdir(data_dir):
+                # matches ".123.tmp" style
+                if name.startswith(".") and name.endswith(".tmp"):
+                    tmp_path = os.path.join(data_dir, name)
+                    try:
+                        os.remove(tmp_path)
+                        deleted_tmps += 1
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # 2) Find stuck uploads
+    stuck_stmt = select(Object.id, Object.storage_key).where(Object.status == "uploading")
+    stuck = db.execute(stuck_stmt).all()
+    if not stuck:
+        return {"recovered": 0, "deleted_files": deleted_files, "deleted_tmp": deleted_tmps}
+
+    # 3) For each stuck object: cleanup file and mark failed
+    for obj_id, storage_key in stuck:
+        # Decide expected path:
+        # - if storage_key set -> use it
+        # - else -> default path used by save_file: {data_dir}/{obj_id}
+        path = storage_key or os.path.join(data_dir, str(obj_id))
+
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted_files += 1
+            except Exception:
+                pass
+
+        db.execute(
+            update(Object)
+            .where(Object.id == obj_id)
+            .values(
+                status="failed",
+                storage_key=None,
+                size=None,
+                mime_type=None,
+            )
+        )
+        recovered += 1
+
+    db.commit()
+    return {"recovered": recovered, "deleted_files": deleted_files, "deleted_tmp": deleted_tmps}
