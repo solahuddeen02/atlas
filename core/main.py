@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     yield
-
+    
     # Shutdown (ถ้ามี cleanup อื่น ๆ ใส่ตรงนี้)
 
 

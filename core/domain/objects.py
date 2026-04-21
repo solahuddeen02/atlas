@@ -388,23 +388,20 @@ def get_children_ids(db: Session, parent_id: int) -> list[int]:
 
 
 def trash_object_recursive(db: Session, obj_id: int) -> None:
-    """
-    Mark object and all descendants as deleted.
-    Uses the same DB session throughout recursion.
-    """
-    now = _utc_iso()
+    now = _utc_iso
+    queue = [obj_id]
 
-    db.execute(
-        update(Object)
-        .where(Object.id == obj_id)
-        .values(deleted_at=now)
-    )
+    while queue:
+        current_id = queue.pop()
+        db.execute(
+            update(Object)
+            .where(Object.id == current_id)
+            .values(deleted_at=now)
+        )
+        children = get_children_ids(db, current_id)
+        queue.extend(children)
+    
     db.commit()
-
-    children = get_children_ids(db, obj_id)
-    for child_id in children:
-        trash_object_recursive(db, child_id)
-
 
 # -------------------------
 # Phase 7A.4: Startup recovery

@@ -91,7 +91,7 @@ def download_object(
 ):
     obj = get_object(db, obj_id)
     if not obj:
-        return {"error": "object not found"}
+        raise HTTPException(status_code=404, datail="object not found")
 
     return FileResponse(
         path=obj["storage"],
