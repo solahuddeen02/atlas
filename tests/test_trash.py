@@ -16,7 +16,7 @@ def test_delete_moves_to_trash(app_client, test_paths):
     assert r2.json()["status"] == "trashed"
 
     # ต้องอยู่ใน trash
-    r3 = app_client.get("/trash")
+    r3 = app_client.get("/objects/trash")
     ids = [item["id"] for item in r3.json()]
     assert obj_id in ids
 
