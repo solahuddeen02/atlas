@@ -21,7 +21,7 @@ from core.domain.objects import (
     set_status,
     trash_object_recursive,
 )
-from core.storage.local import save_file
+from core.storage.factory import get_storage
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 
@@ -38,11 +38,12 @@ def upload_object(
     obj_id: int | None = None
     created_at = datetime.utcnow().isoformat()
     mime_type = file.content_type
+    storage = get_storage()  # ← ใช้ factory
 
     try:
         with db.begin():
             obj_id = create_object(db, obj_type, name, parent_id, commit=False)
-            path, size = save_file(obj_id, file.file)
+            path, size = storage.save(obj_id, file.file)  # ← เปลี่ยนตรงนี้
             attach_storage(db, obj_id, path, commit=False)
             attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
             set_status(db, obj_id, "ready", commit=False)
@@ -57,9 +58,9 @@ def upload_object(
         }
 
     except Exception as e:
-        if path and os.path.exists(path):
+        if path and storage.exists(path):  # ← เปลี่ยนตรงนี้
             try:
-                os.remove(path)
+                storage.delete(path)
             except Exception:
                 pass
         if obj_id is not None:
@@ -75,15 +76,23 @@ def download_object(obj_id: int, db: Session = Depends(get_db)):
     obj = get_object(db, obj_id)
     if not obj:
         raise HTTPException(status_code=404, detail="object not found")
-    if not obj["storage"] or not os.path.exists(obj["storage"]):
+
+    storage = get_storage()
+    if not obj["storage"] or not storage.exists(obj["storage"]):
         raise HTTPException(status_code=404, detail="file not found on storage")
 
+    # local → FileResponse, minio → redirect URL
+    backend = os.getenv("STORAGE_BACKEND", "local")
+    if backend == "minio":
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=storage.get_path(obj["storage"]))
+
+    from fastapi.responses import FileResponse
     return FileResponse(
-        path=obj["storage"],
+        path=storage.get_path(obj["storage"]),
         filename=obj["name"],
         media_type="application/octet-stream",
     )
-
 
 @router.get("")
 def list_objects_api(

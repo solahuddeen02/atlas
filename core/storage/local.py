@@ -5,41 +5,52 @@ import os
 from pathlib import Path
 from typing import BinaryIO, Tuple
 
+from core.storage.base import StorageBackend
+
 CHUNK_SIZE = 1024 * 1024  # 1MB
-DATA_DIR = os.getenv("ATLAS_DATA_DIR", "data")
 
 
-def save_file(obj_id: int, src: BinaryIO) -> Tuple[str, int]:
-    """
-    Atomic-ish local save:
-    - write to temp file
-    - os.replace to final path (atomic on same filesystem)
-    Returns (final_path, size_bytes)
-    """
-    base = Path(DATA_DIR)
-    base.mkdir(parents=True, exist_ok=True)
+class LocalStorage(StorageBackend):
 
-    final_path = base / f"{obj_id}"
-    tmp_path = base / f".{obj_id}.tmp"
+    def __init__(self, data_dir: str | None = None):
+        self.data_dir = Path(data_dir or os.getenv("ATLAS_DATA_DIR", "data"))
 
-    size = 0
-    try:
-        with open(tmp_path, "wb") as f:
-            while True:
-                chunk = src.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                f.write(chunk)
-                size += len(chunk)
+    def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        final_path = self.data_dir / str(object_id)
+        tmp_path = self.data_dir / f".{object_id}.tmp"
+        size = 0
 
-        os.replace(tmp_path, final_path)
-        return str(final_path), size
-
-    except Exception:
-        # Cleanup temp file on failure
         try:
-            if tmp_path.exists():
-                tmp_path.unlink()
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = src.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    size += len(chunk)
+            os.replace(tmp_path, final_path)
+            return str(final_path), size
         except Exception:
-            pass
-        raise
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
+            raise
+
+    def delete(self, storage_key: str) -> None:
+        path = Path(storage_key)
+        if path.exists():
+            path.unlink()
+
+    def exists(self, storage_key: str) -> bool:
+        return Path(storage_key).exists()
+
+    def get_path(self, storage_key: str) -> str:
+        return storage_key
+
+
+# backward-compatible function สำหรับ code เดิมที่ยังใช้อยู่
+def save_file(object_id: int, src: BinaryIO) -> Tuple[str, int]:
+    return LocalStorage().save(object_id, src)

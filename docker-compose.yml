@@ -9,7 +9,24 @@ services:
     environment:
       - ATLAS_DATA_DIR=data
       - DATABASE_URL=sqlite:///./db/atlas.db
+      - SECRET_KEY=change-this-in-production
+      - STORAGE_BACKEND=local
+    depends_on:
+      - minio
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
 
 volumes:
   atlas_data:
   atlas_db:
+  minio_data:
