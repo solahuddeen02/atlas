@@ -14,7 +14,7 @@ from core.domain.objects import recover_incomplete_uploads
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Dev only: in production, run `alembic upgrade head` before starting 
     init_db()
 
     data_dir = os.getenv("ATLAS_DATA_DIR", "data")
