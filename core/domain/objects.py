@@ -388,7 +388,7 @@ def get_children_ids(db: Session, parent_id: int) -> list[int]:
 
 
 def trash_object_recursive(db: Session, obj_id: int) -> None:
-    now = _utc_iso
+    now = _utc_iso()
     queue = [obj_id]
 
     while queue:
