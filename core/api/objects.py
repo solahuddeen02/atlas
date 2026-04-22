@@ -90,8 +90,8 @@ def download_object(
     db: Session = Depends(get_db),
 ):
     obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, datail="object not found")
+    if not obj["storage"] or not os.path.exists(obj["storage"]):
+        raise HTTPException(status_code=404, detail="object not found")
 
     return FileResponse(
         path=obj["storage"],
@@ -172,6 +172,9 @@ def move_object_api(
     new_parent_id: int | None = None,
     db: Session = Depends(get_db),
 ):
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
     move_object(db, obj_id, new_parent_id)
     return {
         "id": obj_id,
@@ -194,6 +197,9 @@ def restore_object_api(
     obj_id: int,
     db: Session = Depends(get_db),
 ):
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
     restore_object(db, obj_id)
     return {"id": obj_id, "status": "restored"}
 
@@ -203,5 +209,8 @@ def delete_object(
     obj_id: int,
     db: Session = Depends(get_db),
 ):
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
     trash_object_recursive(db, obj_id)
     return {"status": "trashed", "id": obj_id}
