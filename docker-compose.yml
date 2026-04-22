@@ -1,0 +1,15 @@
+services:
+  atlas:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - atlas_data:/app/data
+      - atlas_db:/app/db
+    environment:
+      - ATLAS_DATA_DIR=data
+      - DATABASE_URL=sqlite:///./db/atlas.db
+
+volumes:
+  atlas_data:
+  atlas_db:
