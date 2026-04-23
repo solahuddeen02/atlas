@@ -54,7 +54,10 @@ switch ($Task) {
     Get-ChildItem -Recurse -Force -Filter "*.pyc" | Remove-Item -Force -ErrorAction SilentlyContinue
     Write-Host "Clean done." -ForegroundColor Green
   }
-
+  "docker" {
+    docker compose up --build
+  }
+  
   default {
     throw "Unknown task: $Task"
   }
