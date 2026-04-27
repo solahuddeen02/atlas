@@ -1,9 +1,11 @@
 import { useState } from "react"
+import RegisterPage from "./RegisterPage"
 
 function LoginPage() {
     const [username, setUsername] = useState("")
     const [password, setPassword] = useState("")
     const [error, setError] = useState(null)
+    const [showRegister, setShowRegister] = useState(false)
 
     function handleSubmit() {
         fetch("http://127.0.0.1:8000/auth/login", {
@@ -22,7 +24,7 @@ function LoginPage() {
             .catch(err => setError(err.message))
     }
 
-    
+    if (showRegister) { return <RegisterPage onBack={() => setShowRegister(false)} /> }
     return (
         <div className="flex h-screen items-center justify-center bg-gray-100">
             <div className="bg-white p-8 rounded shadow w-80">
@@ -43,6 +45,9 @@ function LoginPage() {
                 {error && <p className="text-red-500 mb-2">{error}</p>}
                 <button className="w-full bg-slate-900 text-white py-2 rounded" onClick={handleSubmit}>
                     Login
+                </button>
+                <button className="w-full text-sm text-gray-500 hover:underline mt-2" onClick={() => setShowRegister(true)}>
+                    ยังไม่มีบัญชี? สมัครสมาชิก
                 </button>
             </div>
         </div>
