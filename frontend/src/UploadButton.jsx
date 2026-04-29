@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { authFetch } from "./api"
 
 function UploadButton({ onUpload }) {
   const [loading, setLoading] = useState(false)
@@ -16,7 +17,7 @@ function UploadButton({ onUpload }) {
     const form = new FormData()
     form.append("file", file)
 
-    fetch(`http://127.0.0.1:8000/objects/upload?obj_type=file&name=${file.name}`, {
+    authFetch(`http://127.0.0.1:8000/objects/upload?obj_type=file&name=${file.name}`, {
       method: "POST",
       body: form,
     })

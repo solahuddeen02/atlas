@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $VenvPython  = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 
-function Ensure-Venv {
+function Initialize-Venv {
   if (-not (Test-Path $VenvPython)) {
     Write-Host "'.venv' not found. Creating venv..." -ForegroundColor Yellow
     & py -3.11 -m venv (Join-Path $ProjectRoot ".venv")
@@ -17,7 +17,7 @@ function Ensure-Venv {
 }
 
 Set-Location $ProjectRoot
-Ensure-Venv
+Initialize-Venv
 
 switch ($Task) {
   "bootstrap" {
