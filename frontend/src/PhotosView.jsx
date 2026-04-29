@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react"
+import { authFetch } from "./api"
 
 function PhotosView() {
     const [photos, setPhotos] = useState([])
 
     useEffect(() => {
-        fetch("http://127.0.0.1:8000/photos")
+        authFetch("http://127.0.0.1:8000/photos")
             .then(res => res.json())
             .then(data => setPhotos(data))
     }, [])

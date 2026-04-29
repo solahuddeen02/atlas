@@ -24,6 +24,7 @@ def create_object(
     obj_type: str,
     name: str,
     parent_id: int | None = None,
+    owner_id: int | None = None,
     *,
     commit: bool = True,
 ) -> int:
@@ -35,6 +36,7 @@ def create_object(
         type=obj_type,
         name=name,
         parent_id=parent_id,
+        owner_id=owner_id,
         created_at=_utc_iso(),
         status="uploading",
     )
@@ -162,6 +164,7 @@ def list_objects(
     obj_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    owner_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
@@ -169,6 +172,8 @@ def list_objects(
     ]
     if obj_type:
         conditions.append(Object.type == obj_type)
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
     stmt = (
         select(
@@ -208,6 +213,7 @@ def list_photos(
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
+    owner_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
@@ -216,6 +222,8 @@ def list_photos(
     ]
     if q:
         conditions.append(Object.name.like(f"%{q}%"))
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
     stmt = (
         select(
@@ -255,6 +263,7 @@ def list_drive_objects(
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
+    owner_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
@@ -350,10 +359,19 @@ def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
     ]
 
 
-def list_trash(db: Session, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+def list_trash(
+    db: Session, 
+    limit: int = 20, 
+    offset: int = 0,
+    owner_id: int | None = None,
+) -> list[dict[str, Any]]:
+    conditions = [Object.deleted_at.is_not(None)]
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
+
     stmt = (
         select(Object.id, Object.type, Object.name, Object.deleted_at, Object.status)
-        .where(Object.deleted_at.is_not(None))
+        .where(and_(*conditions))
         .order_by(desc(Object.deleted_at))
         .limit(limit)
         .offset(offset)

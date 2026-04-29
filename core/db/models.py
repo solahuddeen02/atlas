@@ -19,7 +19,7 @@ class Object(Base):
     created_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="ready")
-
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
 class User(Base):
     __tablename__ = "users"

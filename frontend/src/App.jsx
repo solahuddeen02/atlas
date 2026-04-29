@@ -5,26 +5,36 @@ import UploadButton from './UploadButton'
 import PhotosView from './PhotosView'
 import LoginPage from './LoginPage'
 import TrashView from './TrashView'
+import { authFetch } from './api'
 
 function App() {
   const [activeItem, setActiveItem] = useState("Drive")
   const [files, setFiles] = useState([])
-
-  const token = localStorage.getItem("token")
-  if (!token) return <LoginPage />
+  const [token, setToken] = useState(localStorage.getItem("token"))
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/objects")
-      .then(res => res.json())
+    if (!token) return
+    authFetch("http://127.0.0.1:8000/objects")
+      .then(res => {
+        if (res.status === 401) { logout(); return [] }
+        return res.json()
+      })
       .then(data => setFiles(data))
-  }, [])
+  }, [token])
 
   function refreshFiles() {
-    fetch("http://127.0.0.1:8000/objects")
+    authFetch("http://127.0.0.1:8000/objects")
       .then(res => res.json())
       .then(data => setFiles(data))
   }
 
+  function logout() {
+    localStorage.removeItem("token")
+    setToken(null)
+  }
+
+
+  if (!token) return <LoginPage onLogin={setToken} />
 
   return (
     <div className="flex h-screen">
@@ -34,7 +44,7 @@ function App() {
           <UploadButton onUpload={refreshFiles} />
           <button
             className="text-sm text-gray-500 hover:text-red-500"
-            onClick={() => { localStorage.removeItem("token"); window.location.reload() }}
+            onClick={logout}
           >
             Logout
           </button>

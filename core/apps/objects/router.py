@@ -7,6 +7,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from core.apps.auth.dependencies import get_current_user
+from core.db.models import User
 
 from core.db.session import get_db
 from core.domain.objects import (
@@ -33,6 +35,7 @@ def upload_object(
     parent_id: int | None = None,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     path = None
     obj_id: int | None = None
@@ -41,12 +44,12 @@ def upload_object(
     storage = get_storage()  # ← ใช้ factory
 
     try:
-        with db.begin():
-            obj_id = create_object(db, obj_type, name, parent_id, commit=False)
-            path, size = storage.save(obj_id, file.file)  # ← เปลี่ยนตรงนี้
-            attach_storage(db, obj_id, path, commit=False)
-            attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
-            set_status(db, obj_id, "ready", commit=False)
+        obj_id = create_object(db, obj_type, name, parent_id, owner_id=current_user.id, commit=False)
+        path, size = storage.save(obj_id, file.file)
+        attach_storage(db, obj_id, path, commit=False)
+        attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
+        set_status(db, obj_id, "ready", commit=False)
+        db.commit()
 
         return {
             "id": obj_id,
@@ -58,7 +61,8 @@ def upload_object(
         }
 
     except Exception as e:
-        if path and storage.exists(path):  # ← เปลี่ยนตรงนี้
+        db.rollback()
+        if path and storage.exists(path): 
             try:
                 storage.delete(path)
             except Exception:
@@ -72,7 +76,11 @@ def upload_object(
 
 
 @router.get("/{obj_id}/download")
-def download_object(obj_id: int, db: Session = Depends(get_db)):
+def download_object(
+    obj_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     obj = get_object(db, obj_id)
     if not obj:
         raise HTTPException(status_code=404, detail="object not found")
@@ -100,8 +108,9 @@ def list_objects_api(
     limit: int = 20,
     offset: int = 0,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    return list_objects(db, obj_type=obj_type, limit=limit, offset=offset)
+    return list_objects(db, obj_type=obj_type, limit=limit, offset=offset, owner_id=current_user.id)
 
 
 @router.post("/{obj_id}/move")
@@ -109,6 +118,7 @@ def move_object_api(
     obj_id: int,
     new_parent_id: int | None = None,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     obj = get_object(db, obj_id)
     if not obj:
@@ -118,12 +128,21 @@ def move_object_api(
 
 
 @router.get("/trash")
-def list_trash_api(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
-    return list_trash(db, limit, offset)
+def list_trash_api(
+    limit: int = 20, 
+    offset: int = 0, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return list_trash(db, limit, offset, owner_id=current_user.id)
 
 
 @router.post("/{obj_id}/restore")
-def restore_object_api(obj_id: int, db: Session = Depends(get_db)):
+def restore_object_api(
+    obj_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     obj = get_object(db, obj_id)
     if not obj:
         raise HTTPException(status_code=404, detail="object not found")
@@ -132,7 +151,11 @@ def restore_object_api(obj_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{obj_id}")
-def delete_object(obj_id: int, db: Session = Depends(get_db)):
+def delete_object(
+    obj_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     obj = get_object(db, obj_id)
     if not obj:
         raise HTTPException(status_code=404, detail="object not found")

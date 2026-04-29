@@ -1,7 +1,7 @@
 import { useState } from "react"
 import RegisterPage from "./RegisterPage"
 
-function LoginPage() {
+function LoginPage({ onLogin }) {
     const [username, setUsername] = useState("")
     const [password, setPassword] = useState("")
     const [error, setError] = useState(null)
@@ -19,7 +19,7 @@ function LoginPage() {
             })
             .then(data => {
                 localStorage.setItem("token", data.access_token)
-                window.location.reload()
+                onLogin(data.access_token)
             })
             .catch(err => setError(err.message))
     }

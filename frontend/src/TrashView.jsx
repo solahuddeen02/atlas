@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react"
+import { authFetch } from "./api"
 
 function TrashView() {
   const [items, setItems] = useState([])
 
   function loadTrash() {
-    fetch("http://127.0.0.1:8000/objects/trash")
+    authFetch("http://127.0.0.1:8000/objects/trash")
       .then(res => res.json())
       .then(data => setItems(data))
   }
@@ -14,7 +15,7 @@ function TrashView() {
   }, [])
 
   function restore(id) {
-    fetch(`http://127.0.0.1:8000/objects/${id}/restore`, { method: "POST" })
+    authFetch(`http://127.0.0.1:8000/objects/${id}/restore`, { method: "POST" })
       .then(() => loadTrash())
   }
 
