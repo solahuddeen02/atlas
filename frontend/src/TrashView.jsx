@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react"
 import { authFetch } from "./api"
 import { API_URL } from "./config"
+import { useToast } from "./Toast"
 
 function TrashView() {
   const LIMIT = 20
+  const showToast = useToast()
   const [items, setItems] = useState([])
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -16,6 +18,7 @@ function TrashView() {
         setHasMore(data.length === LIMIT)
         setOffset(off + data.length)
       })
+      .catch(err => showToast(err.message))
   }
 
   useEffect(() => { loadTrash(0, false) }, [])
@@ -23,18 +26,21 @@ function TrashView() {
   function restore(id) {
     authFetch(`${API_URL}/objects/${id}/restore`, { method: "POST" })
       .then(() => loadTrash(0, false))
+      .catch(err => showToast(err.message))
   }
 
   function permanentDelete(id, name) {
     if (!confirm(`ลบ "${name}" ถาวร? ไม่สามารถ restore ได้อีก`)) return
     authFetch(`${API_URL}/objects/${id}/permanent`, { method: "DELETE" })
       .then(() => loadTrash(0, false))
+      .catch(err => showToast(err.message))
   }
 
   function emptyTrash() {
     if (!confirm(`ลบทั้งหมด ${items.length} รายการ? ไม่สามารถ restore ได้อีก`)) return
     authFetch(`${API_URL}/objects/trash/empty`, { method: "DELETE" })
       .then(() => loadTrash(0, false))
+      .catch(err => showToast(err.message))
   }
 
   if (items.length === 0) return <p className="text-gray-500">Trash is empty.</p>

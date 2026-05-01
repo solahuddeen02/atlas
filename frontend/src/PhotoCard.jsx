@@ -13,6 +13,7 @@ function PhotoCard({ photo, onClick, onDelete }) {
                 objectUrl = URL.createObjectURL(blob)
                 setThumbSrc(objectUrl)
             })
+            .catch(() => {})
         return () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }
     }, [photo.id])
 

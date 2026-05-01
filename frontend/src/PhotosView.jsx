@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { authFetch } from "./api"
 import { API_URL } from "./config"
 import PhotoCard from "./PhotoCard"
+import { useToast } from "./Toast"
 
 function PhotosView() {
     const LIMIT = 20
@@ -11,6 +12,7 @@ function PhotosView() {
     const [selected, setSelected] = useState(null)
     const [imgSrc, setImgSrc] = useState(null)
     const [q, setQ] = useState("")
+    const showToast = useToast()
 
     function loadPhotos(off = 0, append = false) {
         authFetch(`${API_URL}/photos?limit=${LIMIT}&offset=${off}`)
@@ -20,6 +22,7 @@ function PhotosView() {
                 setHasMore(data.length === LIMIT)
                 setOffset(off + data.length)
             })
+            .catch(err => showToast(err.message))
     }
 
     useEffect(() => { loadPhotos(0, false) }, [])
@@ -29,6 +32,7 @@ function PhotosView() {
         authFetch(`${API_URL}/objects/${photo.id}/download`)
             .then(res => res.blob())
             .then(blob => setImgSrc(URL.createObjectURL(blob)))
+            .catch(err => showToast(err.message))
     }
 
     function closeModal() {
@@ -40,6 +44,7 @@ function PhotosView() {
     function trashPhoto(id) {
         authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
             .then(() => loadPhotos(0, false))
+            .catch(err => showToast(err.message))
     }
 
     const filtered = q

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { authFetch } from "./api"
 import { API_URL } from "./config"
 import UploadButton from "./UploadButton"
+import { useToast } from "./Toast"
 
 function DriveView() {
   const LIMIT = 20
@@ -15,6 +16,7 @@ function DriveView() {
   const [renamingId, setRenamingId] = useState(null)
   const [renameValue, setRenameValue] = useState("")
 
+  const showToast = useToast()
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id
 
   function fetchItems(off = 0, append = false) {
@@ -28,6 +30,7 @@ function DriveView() {
         setHasMore(data.length === LIMIT)
         setOffset(off + data.length)
       })
+      .catch(err => showToast(err.message))
   }
 
   useEffect(() => { setItems([]); setOffset(0); fetchItems(0, false) }, [currentFolderId])
@@ -54,6 +57,7 @@ function DriveView() {
   function trashItem(id) {
     authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
       .then(() => fetchItems(0, false))
+      .catch(err => showToast(err.message))
   }
 
   function downloadFile(id, name) {
@@ -67,6 +71,7 @@ function DriveView() {
         a.click()
         URL.revokeObjectURL(url)
       })
+      .catch(err => showToast(err.message))
   }
 
   function createFolder() {
@@ -78,6 +83,7 @@ function DriveView() {
     })
       .then(res => res.json())
       .then(() => { fetchItems(0, false); setNewFolderName(""); setShowNewFolder(false) })
+      .catch(err => showToast(err.message))
   }
 
   function startRename(item) {
@@ -93,6 +99,7 @@ function DriveView() {
       body: JSON.stringify({ name: renameValue.trim() }),
     })
       .then(() => { fetchItems(0, false); setRenamingId(null) })
+      .catch(err => { showToast(err.message); setRenamingId(null) })
   }
 
   const filtered = q

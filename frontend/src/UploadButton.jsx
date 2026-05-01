@@ -23,13 +23,10 @@ function UploadButton({ onUpload, parentId = null }) {
       method: "POST",
       body: form,
     })
-      .then(res => {
-        if (!res.ok) throw new Error("Upload failed")
-        return res.json()
-      })
+      .then(res => res.json())
       .then(() => {
         setSuccess(true)
-        onUpload()  
+        onUpload()
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
