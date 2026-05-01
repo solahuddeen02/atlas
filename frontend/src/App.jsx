@@ -1,12 +1,10 @@
 import { useState } from 'react'
 import Sidebar from './Sidebar'
-import DriveView from './DriveView'
-import PhotosView from './PhotosView'
 import LoginPage from './LoginPage'
-import TrashView from './TrashView'
+import { APPS } from './apps'
 
 function App() {
-  const [activeItem, setActiveItem] = useState("Drive")
+  const [activeItem, setActiveItem] = useState(APPS[0].id)
   const [token, setToken] = useState(localStorage.getItem("token"))
 
   function logout() {
@@ -15,6 +13,8 @@ function App() {
   }
 
   if (!token) return <LoginPage onLogin={setToken} />
+
+  const ActiveComponent = APPS.find(a => a.id === activeItem)?.component
 
   return (
     <div className="flex h-screen">
@@ -28,9 +28,7 @@ function App() {
             Logout
           </button>
         </div>
-        {activeItem === "Drive" && <DriveView />}
-        {activeItem === "Photos" && <PhotosView />}
-        {activeItem === "Trash" && <TrashView />}
+        {ActiveComponent && <ActiveComponent />}
       </div>
     </div>
   )

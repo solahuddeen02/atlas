@@ -1,16 +1,18 @@
+import { APPS } from "./apps"
+
 function Sidebar({ activeItem, setActiveItem }) {
   return (
     <div className="w-48 bg-slate-900 p-4 text-white">
-      <h2 className="text-xl font-bold">Atlas</h2>
-      {["Drive", "Photos", "Trash"].map(item => (
+      <h2 className="text-xl font-bold mb-2">Atlas</h2>
+      {APPS.map(app => (
         <p
-          key={item}
-          onClick={() => setActiveItem(item)}
+          key={app.id}
+          onClick={() => setActiveItem(app.id)}
           className={`cursor-pointer px-2 py-1 rounded ${
-            activeItem === item ? "bg-slate-600" : "hover:bg-slate-700"
+            activeItem === app.id ? "bg-slate-600" : "hover:bg-slate-700"
           }`}
         >
-          {item}
+          {app.label}
         </p>
       ))}
     </div>
