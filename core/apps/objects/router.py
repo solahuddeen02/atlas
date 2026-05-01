@@ -19,6 +19,8 @@ from core.domain.objects import (
     list_objects,
     list_trash,
     move_object,
+    permanent_delete_object,
+    rename_object,
     restore_object,
     set_status,
     trash_object_recursive,
@@ -150,10 +152,24 @@ def restore_object_api(
     return {"id": obj_id, "status": "restored"}
 
 
+@router.patch("/{obj_id}/rename")
+def rename_object_api(
+    obj_id: int,
+    name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
+    rename_object(db, obj_id, name)
+    return {"id": obj_id, "name": name}
+
+
 @router.delete("/{obj_id}")
 def delete_object(
-    obj_id: int, 
-    db: Session = Depends(get_db), 
+    obj_id: int,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     obj = get_object(db, obj_id)
@@ -161,3 +177,26 @@ def delete_object(
         raise HTTPException(status_code=404, detail="object not found")
     trash_object_recursive(db, obj_id)
     return {"status": "trashed", "id": obj_id}
+
+
+@router.delete("/{obj_id}/permanent")
+def permanent_delete_object_api(
+    obj_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
+
+    storage_key = permanent_delete_object(db, obj_id)
+
+    if storage_key:
+        storage = get_storage()
+        if storage.exists(storage_key):
+            try:
+                storage.delete(storage_key)
+            except Exception:
+                pass
+
+    return {"status": "deleted", "id": obj_id}

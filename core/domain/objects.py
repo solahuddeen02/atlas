@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, desc, select, update
+from sqlalchemy import and_, delete, desc, select, update
 from sqlalchemy.orm import Session
 
 from core.db.models import Object
@@ -124,6 +124,11 @@ def soft_delete_object(db: Session, obj_id: int) -> None:
     db.commit()
 
 
+def rename_object(db: Session, obj_id: int, name: str) -> None:
+    db.execute(update(Object).where(Object.id == obj_id).values(name=name))
+    db.commit()
+
+
 def restore_object(db: Session, obj_id: int) -> None:
     db.execute(
         update(Object)
@@ -131,6 +136,18 @@ def restore_object(db: Session, obj_id: int) -> None:
         .values(deleted_at=None)
     )
     db.commit()
+
+
+def permanent_delete_object(db: Session, obj_id: int) -> str | None:
+    """Delete object row from DB. Returns storage_key so caller can delete the file."""
+    row = db.execute(
+        select(Object.storage_key).where(Object.id == obj_id)
+    ).one_or_none()
+    storage_key = row[0] if row else None
+
+    db.execute(delete(Object).where(Object.id == obj_id))
+    db.commit()
+    return storage_key
 
 
 # -------------------------
@@ -306,11 +323,17 @@ def list_drive_objects(
     ]
 
 
-def create_folder(db: Session, name: str, parent_id: int | None = None) -> int:
+def create_folder(
+    db: Session,
+    name: str,
+    parent_id: int | None = None,
+    owner_id: int | None = None,
+) -> int:
     folder = Object(
         type="folder",
         name=name,
         parent_id=parent_id,
+        owner_id=owner_id,
         created_at=_utc_iso(),
         status="ready",
     )
@@ -320,7 +343,11 @@ def create_folder(db: Session, name: str, parent_id: int | None = None) -> int:
     return folder.id
 
 
-def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
+def list_folder(
+    db: Session,
+    parent_id: int | None,
+    owner_id: int | None = None,
+) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
         Object.status == "ready",
@@ -329,6 +356,8 @@ def list_folder(db: Session, parent_id: int | None) -> list[dict[str, Any]]:
         conditions.append(Object.parent_id.is_(None))
     else:
         conditions.append(Object.parent_id == parent_id)
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
     stmt = (
         select(
