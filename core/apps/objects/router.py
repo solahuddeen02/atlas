@@ -16,6 +16,7 @@ from core.domain.objects import (
     attach_metadata,
     attach_storage,
     create_object,
+    empty_trash,
     get_object,
     list_objects,
     list_trash,
@@ -142,6 +143,22 @@ def list_trash_api(
     current_user: User = Depends(get_current_user),
 ):
     return list_trash(db, limit, offset, owner_id=current_user.id)
+
+
+@router.delete("/trash/empty")
+def empty_trash_api(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    storage = get_storage()
+    keys = empty_trash(db, current_user.id)
+    for key in keys:
+        if storage.exists(key):
+            try:
+                storage.delete(key)
+            except Exception:
+                pass
+    return {"deleted": len(keys)}
 
 
 @router.post("/{obj_id}/restore")

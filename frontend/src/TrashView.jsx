@@ -24,10 +24,25 @@ function TrashView() {
       .then(loadTrash)
   }
 
+  function emptyTrash() {
+    if (!confirm(`ลบทั้งหมด ${items.length} รายการ? ไม่สามารถ restore ได้อีก`)) return
+    authFetch(`${API_URL}/objects/trash/empty`, { method: "DELETE" })
+      .then(loadTrash)
+  }
+
   if (items.length === 0) return <p className="text-gray-500">Trash is empty.</p>
 
   return (
-    <div className="grid grid-cols-1 gap-2">
+    <div className="flex flex-col gap-3">
+      <div className="flex justify-end">
+        <button
+          className="text-sm text-red-500 border border-red-300 rounded px-3 py-1 hover:bg-red-50"
+          onClick={emptyTrash}
+        >
+          Empty trash ({items.length})
+        </button>
+      </div>
+      <div className="grid grid-cols-1 gap-2">
       {items.map(item => (
         <div key={item.id} className="bg-white rounded shadow px-4 py-3 flex justify-between items-center">
           <span className="font-medium">{item.name}</span>
@@ -42,6 +57,7 @@ function TrashView() {
           </div>
         </div>
       ))}
+      </div>
     </div>
   )
 }

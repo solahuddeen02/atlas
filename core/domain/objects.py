@@ -150,6 +150,24 @@ def permanent_delete_object(db: Session, obj_id: int) -> str | None:
     return storage_key
 
 
+def empty_trash(db: Session, owner_id: int) -> list[str]:
+    """Delete all trashed objects for owner. Returns list of storage_keys to delete from storage."""
+    rows = db.execute(
+        select(Object.storage_key).where(
+            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+        )
+    ).all()
+    storage_keys = [r[0] for r in rows if r[0]]
+
+    db.execute(
+        delete(Object).where(
+            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+        )
+    )
+    db.commit()
+    return storage_keys
+
+
 # -------------------------
 # Read queries
 # -------------------------
