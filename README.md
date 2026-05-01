@@ -1,137 +1,144 @@
-Atlas
+# Atlas
 
-Atlas is a personal self-hosted ecosystem core inspired by Google-style services
-(Drive, Photos, Notion-like apps), designed to be modular, storage-centric,
-and extensible.
+A self-hosted personal ecosystem inspired by Google Drive and Photos — built on a single object-centric architecture.
 
-Status: Early development (experimental / personal R&D)
+> Early development — personal R&D project, not production-ready.
 
+---
 
-VISION
+## Vision
 
-The goal of Atlas is to build a unified self-hosted ecosystem that:
+Atlas is a unified self-hosted platform where every entity (file, photo, folder) is a single `Object` differentiated by `type`. Multiple apps (Drive, Photos, and future apps) are built on top of the same core.
 
-- Stores files, photos, and structured data in one system
-- Uses a single object model as the core abstraction
-- Allows multiple apps (Drive, Photos, Notes, Dashboard, etc.) to be built on top
-- Can evolve into a server OS–like platform managed entirely via web UI
-- Can migrate between storage backends (local to S3 / MinIO)
+---
 
-Atlas is intentionally built core-first before UI, authentication, or apps.
+## Stack
 
+| Layer | Technology |
+|---|---|
+| Backend | Python, FastAPI |
+| Database | SQLite → PostgreSQL (via SQLAlchemy + Alembic) |
+| Storage | Local filesystem → MinIO / S3 |
+| Frontend | React, Vite, Tailwind CSS |
+| Auth | JWT (register / login) |
 
-CORE PHILOSOPHY
+---
 
-Object-Centric Architecture
+## Features
 
-Everything in Atlas is an object:
-- Files
-- Photos
-- Folders
-- Future entities (notes, tasks, dashboards, apps)
+### Drive
+- Upload files into folders
+- Folder navigation with breadcrumb
+- Create, rename, delete (soft) folders and files
+- Download files
+- Search by filename
+- Pagination (load more)
 
-Each object contains:
-- Metadata (type, name, timestamps, status)
-- A reference to storage (not storage logic itself)
+### Photos
+- Photo gallery with authenticated thumbnails
+- Full preview modal
+- Search by filename
+- Delete photos
+- Pagination (load more)
 
-This design keeps the core flexible and future-proof.
+### Trash
+- Soft delete with restore
+- Permanent delete (removes DB row + storage file)
+- Empty trash in one click
+- Pagination (load more)
 
+### Auth & Security
+- JWT-based register / login / logout
+- Per-user file isolation (`owner_id`)
+- Ownership check on every object endpoint (403 on mismatch)
+- Protected routes via `get_current_user` dependency
 
-Separation of Concerns
+---
 
-- API layer: HTTP endpoints (FastAPI)
-- Domain layer: business logic and object lifecycle
-- Storage layer: physical storage (local now, extensible later)
-- Database: metadata only (SQLite for development)
+## Project Structure
 
-
-PROJECT STRUCTURE
-
+```
 atlas/
-  core/
-    api/        HTTP endpoints (FastAPI routers)
-    domain/     Core business logic (objects, lifecycle, rules)
-    storage/    Storage backends (local now, S3/MinIO later)
-    db/         Database layer (SQLAlchemy, schema, sessions)
+├── core/
+│   ├── apps/
+│   │   ├── auth/       — register, login endpoints
+│   │   ├── drive/      — folder navigation, create folder
+│   │   ├── objects/    — upload, download, trash, rename, delete
+│   │   └── photos/     — photo listing
+│   ├── domain/         — business logic (objects lifecycle)
+│   ├── storage/        — storage abstraction (local / MinIO)
+│   └── db/             — SQLAlchemy models, sessions
+├── frontend/
+│   └── src/            — React components
+├── alembic/            — database migrations
+├── scripts/            — dev scripts (run.ps1)
+├── data/               — file storage at runtime (gitignored)
+└── atlas.db            — SQLite database (gitignored)
+```
 
-  tests/        Pytest-based test suite
-  scripts/      Development scripts (no venv activation required)
-    run.ps1
+---
 
-  data/         Runtime file storage (gitignored)
-  requirements.txt
-  README.md
-  .gitignore
+## Getting Started
 
+### Prerequisites
+- Python 3.11+
+- Node.js 18+
 
-CURRENT FEATURES
+### Backend
 
-- Object creation and lifecycle management
-- File upload and download
-- Local filesystem storage
-- SQLite metadata database using SQLAlchemy
-- Atomic upload handling (database + file)
-- Crash-safe recovery on startup
-- Automated test suite (pytest)
-
-
-DEVELOPMENT (WINDOWS FRIENDLY, NO VENV ACTIVATION)
-
-Atlas is designed to run without activating a virtual environment.
-This avoids issues with PowerShell execution policy restrictions.
-
-Prerequisites:
-- Python 3.11
-
-
-Bootstrap (create .venv and install dependencies)
-
+```powershell
+# Bootstrap (create .venv + install dependencies)
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 bootstrap
 
+# Run database migrations
+.\.venv\Scripts\python.exe -m alembic upgrade head
 
-Run development server
-
+# Start backend
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 dev
+```
 
-Server will be available at:
-http://127.0.0.1:8000
+Backend available at: `http://127.0.0.1:8000`  
+API docs: `http://127.0.0.1:8000/docs`
 
+### Frontend
 
-Run tests
+```powershell
+cd frontend
+npm install
 
-powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 test
+# Copy and configure env
+copy .env.example .env
 
+npm run dev
+```
 
-Direct commands (advanced usage, still no activate)
+Frontend available at: `http://localhost:5173`
 
-.\.venv\Scripts\python.exe -m uvicorn core.main:app --reload
-.\.venv\Scripts\python.exe -m pytest
+---
 
+## Configuration
 
-ROADMAP (HIGH LEVEL)
+| Variable | Default | Description |
+|---|---|---|
+| `ATLAS_DATA_DIR` | `data/` | Local file storage path |
+| `ATLAS_STORAGE_BACKEND` | `local` | `local` or `minio` |
+| `SECRET_KEY` | — | JWT signing secret |
+| `VITE_API_URL` | `http://127.0.0.1:8000` | Backend URL (frontend) |
 
-- Dashboard and object browsing UI
-- App separation (Drive / Photos / Notes)
-- User and permission system
-- Storage abstraction (S3 / MinIO)
-- Plugin and app registry
-- Server OS–style installer and management UI
+---
 
+## Roadmap
 
-DISCLAIMER
+- [x] Phase 1 — Foundation (object model, upload, download)
+- [x] Phase 2 — Stability (Alembic, Docker, error handling)
+- [x] Phase 3 — Auth + Storage abstraction
+- [x] Phase 4 — Frontend dashboard (Drive, Photos, Trash)
+- [ ] Plugin / app registry
+- [ ] Management UI
 
-This project is under active development.
+---
 
-APIs, data models, and internal structure may change at any time.
-This is not production-ready.
+## Disclaimer
 
-Currently intended for personal use, learning, and experimentation.
-Licensing and contribution guidelines will be defined later.
-
-
-NOTES
-
-Atlas is built as a long-term foundation, not a finished product.
-
-The focus is correctness, extensibility, and architectural clarity
-before performance tuning, UI polish, or public release.
+APIs, data models, and internal structure may change at any time.  
+Intended for personal use, learning, and experimentation.
