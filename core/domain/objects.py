@@ -277,53 +277,6 @@ def list_photos(
     ]
 
 
-def list_drive_objects(
-    db: Session,
-    limit: int = 20,
-    offset: int = 0,
-    q: str | None = None,
-    owner_id: int | None = None,
-) -> list[dict[str, Any]]:
-    conditions = [
-        Object.deleted_at.is_(None),
-        Object.status == "ready",
-        Object.type == "file",
-    ]
-    if q:
-        conditions.append(Object.name.like(f"%{q}%"))
-
-    stmt = (
-        select(
-            Object.id,
-            Object.type,
-            Object.name,
-            Object.storage_key,
-            Object.size,
-            Object.mime_type,
-            Object.created_at,
-            Object.status,
-        )
-        .where(and_(*conditions))
-        .order_by(desc(Object.created_at))
-        .limit(limit)
-        .offset(offset)
-    )
-
-    rows = db.execute(stmt).all()
-    return [
-        {
-            "id": r[0],
-            "type": "file",
-            "name": r[2],
-            "storage": r[3],
-            "size": r[4],
-            "mime_type": r[5],
-            "created_at": r[6],
-            "status": r[7],
-        }
-        for r in rows
-    ]
-
 
 def create_folder(
     db: Session,

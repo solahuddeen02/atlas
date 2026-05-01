@@ -3,7 +3,7 @@ import { authFetch } from "./api"
 import { API_URL } from "./config"
 import UploadButton from "./UploadButton"
 
-function DriveView({ refreshSignal }) {
+function DriveView() {
   const [items, setItems] = useState([])
   const [breadcrumb, setBreadcrumb] = useState([{ id: null, name: "Home" }])
   const [q, setQ] = useState("")
@@ -21,7 +21,7 @@ function DriveView({ refreshSignal }) {
     authFetch(url).then(res => res.json()).then(setItems)
   }
 
-  useEffect(() => { fetchItems() }, [currentFolderId, refreshSignal])
+  useEffect(() => { fetchItems() }, [currentFolderId])
 
   function formatSize(bytes) {
     if (!bytes) return "-"
