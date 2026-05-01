@@ -320,6 +320,8 @@ def list_folder(
     db: Session,
     parent_id: int | None,
     owner_id: int | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
@@ -344,6 +346,8 @@ def list_folder(
         )
         .where(and_(*conditions))
         .order_by(desc(Object.type), Object.name)
+        .limit(limit)
+        .offset(offset)
     )
 
     rows = db.execute(stmt).all()

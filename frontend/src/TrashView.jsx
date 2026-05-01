@@ -3,31 +3,38 @@ import { authFetch } from "./api"
 import { API_URL } from "./config"
 
 function TrashView() {
+  const LIMIT = 20
   const [items, setItems] = useState([])
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
 
-  function loadTrash() {
-    authFetch(`${API_URL}/objects/trash`)
+  function loadTrash(off = 0, append = false) {
+    authFetch(`${API_URL}/objects/trash?limit=${LIMIT}&offset=${off}`)
       .then(res => res.json())
-      .then(data => setItems(data))
+      .then(data => {
+        setItems(prev => append ? [...prev, ...data] : data)
+        setHasMore(data.length === LIMIT)
+        setOffset(off + data.length)
+      })
   }
 
-  useEffect(() => { loadTrash() }, [])
+  useEffect(() => { loadTrash(0, false) }, [])
 
   function restore(id) {
     authFetch(`${API_URL}/objects/${id}/restore`, { method: "POST" })
-      .then(loadTrash)
+      .then(() => loadTrash(0, false))
   }
 
   function permanentDelete(id, name) {
     if (!confirm(`ลบ "${name}" ถาวร? ไม่สามารถ restore ได้อีก`)) return
     authFetch(`${API_URL}/objects/${id}/permanent`, { method: "DELETE" })
-      .then(loadTrash)
+      .then(() => loadTrash(0, false))
   }
 
   function emptyTrash() {
     if (!confirm(`ลบทั้งหมด ${items.length} รายการ? ไม่สามารถ restore ได้อีก`)) return
     authFetch(`${API_URL}/objects/trash/empty`, { method: "DELETE" })
-      .then(loadTrash)
+      .then(() => loadTrash(0, false))
   }
 
   if (items.length === 0) return <p className="text-gray-500">Trash is empty.</p>
@@ -58,6 +65,14 @@ function TrashView() {
         </div>
       ))}
       </div>
+      {hasMore && (
+        <button
+          className="text-sm text-gray-500 hover:underline text-center py-2"
+          onClick={() => loadTrash(offset, true)}
+        >
+          Load more
+        </button>
+      )}
     </div>
   )
 }

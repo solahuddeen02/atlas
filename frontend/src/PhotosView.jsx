@@ -4,18 +4,25 @@ import { API_URL } from "./config"
 import PhotoCard from "./PhotoCard"
 
 function PhotosView() {
+    const LIMIT = 20
     const [photos, setPhotos] = useState([])
+    const [offset, setOffset] = useState(0)
+    const [hasMore, setHasMore] = useState(false)
     const [selected, setSelected] = useState(null)
     const [imgSrc, setImgSrc] = useState(null)
     const [q, setQ] = useState("")
 
-    function loadPhotos() {
-        authFetch(`${API_URL}/photos`)
+    function loadPhotos(off = 0, append = false) {
+        authFetch(`${API_URL}/photos?limit=${LIMIT}&offset=${off}`)
             .then(res => res.json())
-            .then(data => setPhotos(data))
+            .then(data => {
+                setPhotos(prev => append ? [...prev, ...data] : data)
+                setHasMore(data.length === LIMIT)
+                setOffset(off + data.length)
+            })
     }
 
-    useEffect(() => { loadPhotos() }, [])
+    useEffect(() => { loadPhotos(0, false) }, [])
 
     function openPhoto(photo) {
         setSelected(photo)
@@ -32,7 +39,7 @@ function PhotosView() {
 
     function trashPhoto(id) {
         authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
-            .then(loadPhotos)
+            .then(() => loadPhotos(0, false))
     }
 
     const filtered = q
@@ -65,6 +72,14 @@ function PhotosView() {
                         />
                     ))}
                 </div>
+            )}
+            {hasMore && !q && (
+                <button
+                    className="text-sm text-gray-500 hover:underline text-center py-2 w-full"
+                    onClick={() => loadPhotos(offset, true)}
+                >
+                    Load more
+                </button>
             )}
 
             {selected && (

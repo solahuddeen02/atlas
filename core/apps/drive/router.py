@@ -15,10 +15,12 @@ router = APIRouter(tags=["drive"])
 
 @router.get("/drive/root")
 def drive_root(
+    limit: int = 20,
+    offset: int = 0,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return list_folder(db, None, owner_id=current_user.id)
+    return list_folder(db, None, owner_id=current_user.id, limit=limit, offset=offset)
 
 
 @router.post("/folders")
@@ -34,7 +36,9 @@ def create_folder_api(
 @router.get("/folders/{folder_id}")
 def list_folder_api(
     folder_id: int,
+    limit: int = 20,
+    offset: int = 0,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return list_folder(db, folder_id, owner_id=current_user.id)
+    return list_folder(db, folder_id, owner_id=current_user.id, limit=limit, offset=offset)

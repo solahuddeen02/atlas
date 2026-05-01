@@ -4,7 +4,10 @@ import { API_URL } from "./config"
 import UploadButton from "./UploadButton"
 
 function DriveView() {
+  const LIMIT = 20
   const [items, setItems] = useState([])
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [breadcrumb, setBreadcrumb] = useState([{ id: null, name: "Home" }])
   const [q, setQ] = useState("")
   const [newFolderName, setNewFolderName] = useState("")
@@ -14,14 +17,22 @@ function DriveView() {
 
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id
 
-  function fetchItems() {
-    const url = currentFolderId === null
+  function fetchItems(off = 0, append = false) {
+    const base = currentFolderId === null
       ? `${API_URL}/drive/root`
       : `${API_URL}/folders/${currentFolderId}`
-    authFetch(url).then(res => res.json()).then(setItems)
+    authFetch(`${base}?limit=${LIMIT}&offset=${off}`)
+      .then(res => res.json())
+      .then(data => {
+        setItems(prev => append ? [...prev, ...data] : data)
+        setHasMore(data.length === LIMIT)
+        setOffset(off + data.length)
+      })
   }
 
-  useEffect(() => { fetchItems() }, [currentFolderId])
+  useEffect(() => { setItems([]); setOffset(0); fetchItems(0, false) }, [currentFolderId])
+
+  function loadMore() { fetchItems(offset, true) }
 
   function formatSize(bytes) {
     if (!bytes) return "-"
@@ -42,7 +53,7 @@ function DriveView() {
 
   function trashItem(id) {
     authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
-      .then(fetchItems)
+      .then(() => fetchItems(0, false))
   }
 
   function downloadFile(id, name) {
@@ -66,7 +77,7 @@ function DriveView() {
       body: JSON.stringify({ name: newFolderName.trim(), parent_id: currentFolderId }),
     })
       .then(res => res.json())
-      .then(() => { fetchItems(); setNewFolderName(""); setShowNewFolder(false) })
+      .then(() => { fetchItems(0, false); setNewFolderName(""); setShowNewFolder(false) })
   }
 
   function startRename(item) {
@@ -81,7 +92,7 @@ function DriveView() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: renameValue.trim() }),
     })
-      .then(() => { fetchItems(); setRenamingId(null) })
+      .then(() => { fetchItems(0, false); setRenamingId(null) })
   }
 
   const filtered = q
@@ -189,6 +200,14 @@ function DriveView() {
           </div>
         )
       }
+      {hasMore && !q && (
+        <button
+          className="text-sm text-gray-500 hover:underline text-center py-2"
+          onClick={loadMore}
+        >
+          Load more
+        </button>
+      )}
     </div>
   )
 }
