@@ -161,6 +161,7 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         Object.name,
         Object.storage_key,
         Object.status,
+        Object.owner_id,
     ).where(Object.id == obj_id)
 
     row = db.execute(stmt).one_or_none()
@@ -173,6 +174,7 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         "name": row[2],
         "storage": row[3],
         "status": row[4],
+        "owner_id": row[5],
     }
 
 

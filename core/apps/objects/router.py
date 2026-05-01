@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -11,6 +11,7 @@ from core.apps.auth.dependencies import get_current_user
 from core.db.models import User
 
 from core.db.session import get_db
+from core.apps.objects.schemas import RenameRequest
 from core.domain.objects import (
     attach_metadata,
     attach_storage,
@@ -30,6 +31,15 @@ from core.storage.factory import get_storage
 router = APIRouter(prefix="/objects", tags=["objects"])
 
 
+def _get_owned_object(db: Session, obj_id: int, current_user: User) -> dict:
+    obj = get_object(db, obj_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="object not found")
+    if obj["owner_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return obj
+
+
 @router.post("/upload")
 def upload_object(
     obj_type: str,
@@ -41,9 +51,9 @@ def upload_object(
 ):
     path = None
     obj_id: int | None = None
-    created_at = datetime.utcnow().isoformat()
+    created_at = datetime.now(timezone.utc).isoformat()
     mime_type = file.content_type
-    storage = get_storage()  # ← ใช้ factory
+    storage = get_storage()
 
     try:
         obj_id = create_object(db, obj_type, name, parent_id, owner_id=current_user.id, commit=False)
@@ -64,7 +74,7 @@ def upload_object(
 
     except Exception as e:
         db.rollback()
-        if path and storage.exists(path): 
+        if path and storage.exists(path):
             try:
                 storage.delete(path)
             except Exception:
@@ -79,30 +89,27 @@ def upload_object(
 
 @router.get("/{obj_id}/download")
 def download_object(
-    obj_id: int, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
+    obj_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
+    obj = _get_owned_object(db, obj_id, current_user)
 
     storage = get_storage()
     if not obj["storage"] or not storage.exists(obj["storage"]):
         raise HTTPException(status_code=404, detail="file not found on storage")
 
-    # local → FileResponse, minio → redirect URL
     backend = os.getenv("STORAGE_BACKEND", "local")
     if backend == "minio":
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=storage.get_path(obj["storage"]))
 
-    from fastapi.responses import FileResponse
     return FileResponse(
         path=storage.get_path(obj["storage"]),
         filename=obj["name"],
         media_type="application/octet-stream",
     )
+
 
 @router.get("")
 def list_objects_api(
@@ -110,7 +117,7 @@ def list_objects_api(
     limit: int = 20,
     offset: int = 0,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     return list_objects(db, obj_type=obj_type, limit=limit, offset=offset, owner_id=current_user.id)
 
@@ -120,34 +127,30 @@ def move_object_api(
     obj_id: int,
     new_parent_id: int | None = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
+    _get_owned_object(db, obj_id, current_user)
     move_object(db, obj_id, new_parent_id)
     return {"id": obj_id, "new_parent_id": new_parent_id, "status": "moved"}
 
 
 @router.get("/trash")
 def list_trash_api(
-    limit: int = 20, 
-    offset: int = 0, 
+    limit: int = 20,
+    offset: int = 0,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     return list_trash(db, limit, offset, owner_id=current_user.id)
 
 
 @router.post("/{obj_id}/restore")
 def restore_object_api(
-    obj_id: int, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
+    obj_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
+    _get_owned_object(db, obj_id, current_user)
     restore_object(db, obj_id)
     return {"id": obj_id, "status": "restored"}
 
@@ -155,26 +158,22 @@ def restore_object_api(
 @router.patch("/{obj_id}/rename")
 def rename_object_api(
     obj_id: int,
-    name: str,
+    body: RenameRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
-    rename_object(db, obj_id, name)
-    return {"id": obj_id, "name": name}
+    _get_owned_object(db, obj_id, current_user)
+    rename_object(db, obj_id, body.name)
+    return {"id": obj_id, "name": body.name}
 
 
 @router.delete("/{obj_id}")
 def delete_object(
     obj_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
+    _get_owned_object(db, obj_id, current_user)
     trash_object_recursive(db, obj_id)
     return {"status": "trashed", "id": obj_id}
 
@@ -185,10 +184,7 @@ def permanent_delete_object_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
-
+    _get_owned_object(db, obj_id, current_user)
     storage_key = permanent_delete_object(db, obj_id)
 
     if storage_key:

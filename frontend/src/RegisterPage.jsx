@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { API_URL } from "./config"
 
 function RegisterPage({ onBack }) {
   const [username, setUsername] = useState("")
@@ -7,7 +8,7 @@ function RegisterPage({ onBack }) {
   const [success, setSuccess] = useState(false)
 
   function handleSubmit() {
-    fetch("http://127.0.0.1:8000/auth/register", {
+    fetch(`${API_URL}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { authFetch } from "./api"
+import { API_URL } from "./config"
 import PhotoCard from "./PhotoCard"
 
 function PhotosView() {
@@ -8,15 +9,17 @@ function PhotosView() {
     const [imgSrc, setImgSrc] = useState(null)
     const [q, setQ] = useState("")
 
-    useEffect(() => {
-        authFetch("http://127.0.0.1:8000/photos")
+    function loadPhotos() {
+        authFetch(`${API_URL}/photos`)
             .then(res => res.json())
             .then(data => setPhotos(data))
-    }, [])
+    }
+
+    useEffect(() => { loadPhotos() }, [])
 
     function openPhoto(photo) {
         setSelected(photo)
-        authFetch(`http://127.0.0.1:8000/objects/${photo.id}/download`)
+        authFetch(`${API_URL}/objects/${photo.id}/download`)
             .then(res => res.blob())
             .then(blob => setImgSrc(URL.createObjectURL(blob)))
     }
@@ -25,6 +28,11 @@ function PhotosView() {
         if (imgSrc) URL.revokeObjectURL(imgSrc)
         setSelected(null)
         setImgSrc(null)
+    }
+
+    function trashPhoto(id) {
+        authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
+            .then(loadPhotos)
     }
 
     const filtered = q
@@ -49,7 +57,12 @@ function PhotosView() {
             ) : (
                 <div className="grid grid-cols-3 gap-4">
                     {filtered.map(photo => (
-                        <PhotoCard key={photo.id} photo={photo} onClick={() => openPhoto(photo)} />
+                        <PhotoCard
+                            key={photo.id}
+                            photo={photo}
+                            onClick={() => openPhoto(photo)}
+                            onDelete={() => trashPhoto(photo.id)}
+                        />
                     ))}
                 </div>
             )}
@@ -68,9 +81,17 @@ function PhotosView() {
                             ? <img src={imgSrc} className="max-h-[75vh] max-w-full object-contain rounded" />
                             : <p className="text-gray-400 py-10">Loading...</p>
                         }
-                        <button className="text-sm text-gray-500 hover:underline" onClick={closeModal}>
-                            Close
-                        </button>
+                        <div className="flex gap-4">
+                            <button
+                                className="text-sm text-red-400 hover:text-red-600"
+                                onClick={() => { trashPhoto(selected.id); closeModal() }}
+                            >
+                                Delete
+                            </button>
+                            <button className="text-sm text-gray-500 hover:underline" onClick={closeModal}>
+                                Close
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

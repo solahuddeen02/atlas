@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { authFetch } from "./api"
+import { API_URL } from "./config"
 import UploadButton from "./UploadButton"
 
 function DriveView({ refreshSignal }) {
@@ -15,8 +16,8 @@ function DriveView({ refreshSignal }) {
 
   function fetchItems() {
     const url = currentFolderId === null
-      ? "http://127.0.0.1:8000/drive/root"
-      : `http://127.0.0.1:8000/folders/${currentFolderId}`
+      ? `${API_URL}/drive/root`
+      : `${API_URL}/folders/${currentFolderId}`
     authFetch(url).then(res => res.json()).then(setItems)
   }
 
@@ -40,12 +41,12 @@ function DriveView({ refreshSignal }) {
   }
 
   function trashItem(id) {
-    authFetch(`http://127.0.0.1:8000/objects/${id}`, { method: "DELETE" })
+    authFetch(`${API_URL}/objects/${id}`, { method: "DELETE" })
       .then(fetchItems)
   }
 
   function downloadFile(id, name) {
-    authFetch(`http://127.0.0.1:8000/objects/${id}/download`)
+    authFetch(`${API_URL}/objects/${id}/download`)
       .then(res => res.blob())
       .then(blob => {
         const url = URL.createObjectURL(blob)
@@ -59,10 +60,11 @@ function DriveView({ refreshSignal }) {
 
   function createFolder() {
     if (!newFolderName.trim()) return
-    authFetch(
-      `http://127.0.0.1:8000/folders?name=${encodeURIComponent(newFolderName)}${currentFolderId ? `&parent_id=${currentFolderId}` : ""}`,
-      { method: "POST" }
-    )
+    authFetch(`${API_URL}/folders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newFolderName.trim(), parent_id: currentFolderId }),
+    })
       .then(res => res.json())
       .then(() => { fetchItems(); setNewFolderName(""); setShowNewFolder(false) })
   }
@@ -74,7 +76,11 @@ function DriveView({ refreshSignal }) {
 
   function submitRename(id) {
     if (!renameValue.trim()) { setRenamingId(null); return }
-    authFetch(`http://127.0.0.1:8000/objects/${id}/rename?name=${encodeURIComponent(renameValue)}`, { method: "PATCH" })
+    authFetch(`${API_URL}/objects/${id}/rename`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: renameValue.trim() }),
+    })
       .then(() => { fetchItems(); setRenamingId(null) })
   }
 
