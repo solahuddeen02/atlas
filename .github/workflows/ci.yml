@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          else
+            python -m pip install fastapi uvicorn sqlalchemy pytest httpx
+          fi
+
+      - name: Run tests
+        env:
+          # ให้ tests แยก DB/data dir ใน CI (กันไปโดนไฟล์จริง)
+          DATABASE_URL: "sqlite:///./ci_test.db"
+          ATLAS_DATA_DIR: "./ci_data"
+        run: |
+          python -m pytest

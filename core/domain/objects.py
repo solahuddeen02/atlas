@@ -1,60 +1,188 @@
-from core.db.database import get_connection
+# core/domain/objects.py
+from __future__ import annotations
+
+import os
 from datetime import datetime
+from typing import Any
 
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS objects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL,
-            name TEXT NOT NULL,
-            parent_id INTEGER,
-            storage_key TEXT,
-            size INTEGER,
-            mime_type TEXT,
-            created_at TEXT,
-            deleted_at TEXT
+from sqlalchemy import and_, delete, desc, select, update
+from sqlalchemy.orm import Session
+
+from core.db.models import Object
+
+
+def _utc_iso() -> str:
+    return datetime.utcnow().isoformat()
+
+
+# -------------------------
+# Create / Update primitives
+# -------------------------
+
+def create_object(
+    db: Session,
+    obj_type: str,
+    name: str,
+    parent_id: int | None = None,
+    owner_id: int | None = None,
+    *,
+    commit: bool = True,
+) -> int:
+    """
+    Create an object row early so we can attach storage/metadata later.
+    status starts as 'uploading' for atomic upload flow.
+    """
+    obj = Object(
+        type=obj_type,
+        name=name,
+        parent_id=parent_id,
+        owner_id=owner_id,
+        created_at=_utc_iso(),
+        status="uploading",
+    )
+    db.add(obj)
+
+    if commit:
+        db.commit()
+        db.refresh(obj)
+    else:
+        db.flush()       # assign PK without committing
+        db.refresh(obj)  # ensure obj.id available
+
+    return obj.id
+
+
+def attach_storage(
+    db: Session,
+    obj_id: int,
+    storage_key: str,
+    *,
+    commit: bool = True,
+) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(storage_key=storage_key)
+    )
+    if commit:
+        db.commit()
+
+
+def attach_metadata(
+    db: Session,
+    obj_id: int,
+    size: int | None,
+    mime_type: str | None,
+    created_at: str | None,
+    *,
+    commit: bool = True,
+) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(
+            size=size,
+            mime_type=mime_type,
+            created_at=created_at or _utc_iso(),
         )
-    """)
-    conn.commit()
-    conn.close()
-
-def create_object(obj_type: str, name: str, parent_id: int | None = None):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO objects (type, name, parent_id)
-        VALUES (?, ?, ?)
-        """,
-        (obj_type, name, parent_id),
     )
-    obj_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return obj_id
+    if commit:
+        db.commit()
 
-def attach_storage(obj_id: int, storage_key: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE objects SET storage_key=? WHERE id=?",
-        (storage_key, obj_id)
+
+def set_status(
+    db: Session,
+    obj_id: int,
+    status: str,
+    *,
+    commit: bool = True,
+) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(status=status)
     )
-    conn.commit()
-    conn.close()
+    if commit:
+        db.commit()
 
-def get_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, type, name, storage_key FROM objects WHERE id=?",
-        (obj_id,)
+
+def move_object(db: Session, obj_id: int, new_parent_id: int | None) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(parent_id=new_parent_id)
     )
-    row = cur.fetchone()
-    conn.close()
+    db.commit()
 
+
+def soft_delete_object(db: Session, obj_id: int) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(deleted_at=_utc_iso())
+    )
+    db.commit()
+
+
+def rename_object(db: Session, obj_id: int, name: str) -> None:
+    db.execute(update(Object).where(Object.id == obj_id).values(name=name))
+    db.commit()
+
+
+def restore_object(db: Session, obj_id: int) -> None:
+    db.execute(
+        update(Object)
+        .where(Object.id == obj_id)
+        .values(deleted_at=None)
+    )
+    db.commit()
+
+
+def permanent_delete_object(db: Session, obj_id: int) -> str | None:
+    """Delete object row from DB. Returns storage_key so caller can delete the file."""
+    row = db.execute(
+        select(Object.storage_key).where(Object.id == obj_id)
+    ).one_or_none()
+    storage_key = row[0] if row else None
+
+    db.execute(delete(Object).where(Object.id == obj_id))
+    db.commit()
+    return storage_key
+
+
+def empty_trash(db: Session, owner_id: int) -> list[str]:
+    """Delete all trashed objects for owner. Returns list of storage_keys to delete from storage."""
+    rows = db.execute(
+        select(Object.storage_key).where(
+            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+        )
+    ).all()
+    storage_keys = [r[0] for r in rows if r[0]]
+
+    db.execute(
+        delete(Object).where(
+            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+        )
+    )
+    db.commit()
+    return storage_keys
+
+
+# -------------------------
+# Read queries
+# -------------------------
+
+def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
+    stmt = select(
+        Object.id,
+        Object.type,
+        Object.name,
+        Object.storage_key,
+        Object.status,
+        Object.owner_id,
+    ).where(Object.id == obj_id)
+
+    row = db.execute(stmt).one_or_none()
     if not row:
         return None
 
@@ -63,40 +191,45 @@ def get_object(obj_id: int):
         "type": row[1],
         "name": row[2],
         "storage": row[3],
+        "status": row[4],
+        "owner_id": row[5],
     }
 
+
 def list_objects(
+    db: Session,
     obj_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = []
-    params = []
-
-    # hide trash
-    conditions.append("deleted_at IS NULL")
-
+    owner_id: int | None = None,
+) -> list[dict[str, Any]]:
+    conditions = [
+        Object.deleted_at.is_(None),
+        Object.status == "ready",  # hide incomplete uploads by default
+    ]
     if obj_type:
-        conditions.append("type = ?")
-        params.append(obj_type)
+        conditions.append(Object.type == obj_type)
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.storage_key,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+            Object.status,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
 
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -106,54 +239,47 @@ def list_objects(
             "size": r[4],
             "mime_type": r[5],
             "created_at": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
 
-def attach_metadata(obj_id: int, size: int, mime_type: str, created_at: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET size=?, mime_type=?, created_at=?
-        WHERE id=?
-        """,
-        (size, mime_type, created_at, obj_id)
-    )
-    conn.commit()
-    conn.close()
 
 def list_photos(
+    db: Session,
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
+    owner_id: int | None = None,
+) -> list[dict[str, Any]]:
     conditions = [
-        "mime_type LIKE 'image/%'",
-        "deleted_at IS NULL",
+        Object.deleted_at.is_(None),
+        Object.status == "ready",
+        Object.mime_type.like("image/%"),
     ]
-    params = []
-
     if q:
-        conditions.append("name LIKE ?")
-        params.append(f"%{q}%")
+        conditions.append(Object.name.like(f"%{q}%"))
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.storage_key,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+            Object.status,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -163,89 +289,68 @@ def list_photos(
             "size": r[4],
             "mime_type": r[5],
             "created_at": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
 
-def list_drive_objects(
+
+
+def create_folder(
+    db: Session,
+    name: str,
+    parent_id: int | None = None,
+    owner_id: int | None = None,
+) -> int:
+    folder = Object(
+        type="folder",
+        name=name,
+        parent_id=parent_id,
+        owner_id=owner_id,
+        created_at=_utc_iso(),
+        status="ready",
+    )
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return folder.id
+
+
+def list_folder(
+    db: Session,
+    parent_id: int | None,
+    owner_id: int | None = None,
     limit: int = 20,
     offset: int = 0,
-    q: str | None = None,
-):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, storage_key, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = ["type = 'file'", "deleted_at IS NULL"]
-    params = []
-
-    if q:
-        conditions.append("name LIKE ?")
-        params.append(f"%{q}%")
-
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
-    return [
-        {
-            "id": r[0],
-            "type": "file",
-            "name": r[2],
-            "storage": r[3],
-            "size": r[4],
-            "mime_type": r[5],
-            "created_at": r[6],
-        }
-        for r in rows
+) -> list[dict[str, Any]]:
+    conditions = [
+        Object.deleted_at.is_(None),
+        Object.status == "ready",
     ]
-
-def create_folder(name: str, parent_id: int | None = None):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO objects (type, name, parent_id, created_at)
-        VALUES ('folder', ?, ?, datetime('now'))
-        """,
-        (name, parent_id),
-    )
-    folder_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return folder_id
-
-def list_folder(parent_id: int | None):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    query = """
-        SELECT id, type, name, size, mime_type, created_at
-        FROM objects
-    """
-    conditions = ["deleted_at IS NULL"]
-    params = []
-
     if parent_id is None:
-        conditions.append("parent_id IS NULL")
+        conditions.append(Object.parent_id.is_(None))
     else:
-        conditions.append("parent_id = ?")
-        params.append(parent_id)
+        conditions.append(Object.parent_id == parent_id)
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
 
-    query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY type DESC, name"
+    stmt = (
+        select(
+            Object.id,
+            Object.type,
+            Object.name,
+            Object.size,
+            Object.mime_type,
+            Object.created_at,
+            Object.status,
+        )
+        .where(and_(*conditions))
+        .order_by(desc(Object.type), Object.name)
+        .limit(limit)
+        .offset(offset)
+    )
 
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
@@ -254,113 +359,138 @@ def list_folder(parent_id: int | None):
             "size": r[3],
             "mime_type": r[4],
             "created_at": r[5],
+            "status": r[6],
         }
         for r in rows
     ]
 
-def move_object(obj_id: int, new_parent_id: int | None):
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute(
-        """
-        UPDATE objects
-        SET parent_id = ?
-        WHERE id = ?
-        """,
-        (new_parent_id, obj_id),
+def list_trash(
+    db: Session, 
+    limit: int = 20, 
+    offset: int = 0,
+    owner_id: int | None = None,
+) -> list[dict[str, Any]]:
+    conditions = [Object.deleted_at.is_not(None)]
+    if owner_id is not None:
+        conditions.append(Object.owner_id == owner_id)
+
+    stmt = (
+        select(Object.id, Object.type, Object.name, Object.deleted_at, Object.status)
+        .where(and_(*conditions))
+        .order_by(desc(Object.deleted_at))
+        .limit(limit)
+        .offset(offset)
     )
-
-    conn.commit()
-    conn.close()
-
-def soft_delete_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET deleted_at = datetime('now')
-        WHERE id = ?
-        """,
-        (obj_id,),
-    )
-    conn.commit()
-    conn.close()
-
-def restore_object(obj_id: int):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE objects
-        SET deleted_at = NULL
-        WHERE id = ?
-        """,
-        (obj_id,),
-    )
-    conn.commit()
-    conn.close()
-
-def list_trash(limit: int = 20, offset: int = 0):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT id, type, name, deleted_at
-        FROM objects
-        WHERE deleted_at IS NOT NULL
-        ORDER BY deleted_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    )
-
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [
         {
             "id": r[0],
             "type": r[1],
             "name": r[2],
             "deleted_at": r[3],
+            "status": r[4],
         }
         for r in rows
     ]
 
-def get_children_ids(parent_id: int) -> list[int]:
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute(
-        "SELECT id FROM objects WHERE parent_id = ? AND deleted_at IS NULL",
-        (parent_id,),
+# -------------------------
+# Recursive trash
+# -------------------------
+
+def get_children_ids(db: Session, parent_id: int) -> list[int]:
+    stmt = select(Object.id).where(
+        and_(
+            Object.parent_id == parent_id,
+            Object.deleted_at.is_(None),
+            Object.status == "ready",
+        )
     )
-
-    rows = cur.fetchall()
-    conn.close()
-
+    rows = db.execute(stmt).all()
     return [r[0] for r in rows]
 
-def trash_object_recursive(obj_id: int):
-    now = datetime.utcnow().isoformat()
 
-    conn = get_connection()
-    cur = conn.cursor()
+def trash_object_recursive(db: Session, obj_id: int) -> None:
+    now = _utc_iso()
+    queue = [obj_id]
 
-    # mark self
-    cur.execute(
-        "UPDATE objects SET deleted_at=? WHERE id=?",
-        (now, obj_id),
-    )
+    while queue:
+        current_id = queue.pop()
+        db.execute(
+            update(Object)
+            .where(Object.id == current_id)
+            .values(deleted_at=now)
+        )
+        children = get_children_ids(db, current_id)
+        queue.extend(children)
+    
+    db.commit()
 
-    conn.commit()
-    conn.close()
+# -------------------------
+# Phase 7A.4: Startup recovery
+# -------------------------
 
-    # find children
-    children = get_children_ids(obj_id)
+def recover_incomplete_uploads(db: Session, data_dir: str) -> dict[str, int]:
+    """
+    Recovery policy (safe default):
+    - Find objects stuck in status='uploading'
+    - If a file exists for them, delete it (assume incomplete)
+    - Mark object as status='failed' and clear storage/metadata fields
+    - Delete leftover temp files ".<id>.tmp"
 
-    for child_id in children:
-        trash_object_recursive(child_id)
+    Returns counts for logging/visibility.
+    """
+    recovered = 0
+    deleted_files = 0
+    deleted_tmps = 0
+
+    # 1) Cleanup temp files first
+    try:
+        if os.path.isdir(data_dir):
+            for name in os.listdir(data_dir):
+                # matches ".123.tmp" style
+                if name.startswith(".") and name.endswith(".tmp"):
+                    tmp_path = os.path.join(data_dir, name)
+                    try:
+                        os.remove(tmp_path)
+                        deleted_tmps += 1
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # 2) Find stuck uploads
+    stuck_stmt = select(Object.id, Object.storage_key).where(Object.status == "uploading")
+    stuck = db.execute(stuck_stmt).all()
+    if not stuck:
+        return {"recovered": 0, "deleted_files": deleted_files, "deleted_tmp": deleted_tmps}
+
+    # 3) For each stuck object: cleanup file and mark failed
+    for obj_id, storage_key in stuck:
+        # Decide expected path:
+        # - if storage_key set -> use it
+        # - else -> default path used by save_file: {data_dir}/{obj_id}
+        path = storage_key or os.path.join(data_dir, str(obj_id))
+
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted_files += 1
+            except Exception:
+                pass
+
+        db.execute(
+            update(Object)
+            .where(Object.id == obj_id)
+            .values(
+                status="failed",
+                storage_key=None,
+                size=None,
+                mime_type=None,
+            )
+        )
+        recovered += 1
+
+    db.commit()
+    return {"recovered": recovered, "deleted_files": deleted_files, "deleted_tmp": deleted_tmps}
