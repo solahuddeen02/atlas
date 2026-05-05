@@ -1,23 +1,20 @@
-# core/main.py
 from __future__ import annotations
 
+import importlib
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from core.apps.drive.router import router as drive_router
-from core.apps.objects.router import router as objects_router
-from core.apps.photos.router import router as photos_router
+from core.auth.router import router as auth_router
 from core.db.init import init_db
 from core.db.session import SessionLocal
-from core.domain.objects import recover_incomplete_uploads
-from core.apps.auth.router import router as auth_router
+from apps.objects.domain import recover_incomplete_uploads
+
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Dev only: in production, run `alembic upgrade head` before starting
+async def lifespan(_: FastAPI):
     init_db()
 
     data_dir = os.getenv("ATLAS_DATA_DIR", "data")
@@ -32,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Atlas Core", lifespan=lifespan)
+app = FastAPI(title="Atlas", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,10 +38,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(objects_router)
-app.include_router(drive_router)
-app.include_router(photos_router)
 app.include_router(auth_router)
+
+# Load apps from ATLAS_ENABLED_APPS env — default to all built-in apps
+_enabled = os.getenv("ATLAS_ENABLED_APPS", "objects,drive,photos").split(",")
+for _app_name in _enabled:
+    _app_name = _app_name.strip()
+    if not _app_name:
+        continue
+    try:
+        mod = importlib.import_module(f"apps.{_app_name}.router")
+        app.include_router(mod.router)
+        print(f"[app] loaded: {_app_name}")
+    except ImportError as e:
+        print(f"[app] failed to load '{_app_name}': {e}")
+
 
 @app.get("/health")
 def health():

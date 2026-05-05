@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from core.apps.auth.jwt import create_access_token, hash_password, verify_password
+from core.auth.jwt import create_access_token, hash_password, verify_password
 from core.db.models import Tenant, TenantMember, User
 from core.db.session import get_db
 
@@ -46,7 +46,6 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
     tenant_name = body.tenant_name or body.username
     slug = _slugify(tenant_name)
-    # ensure slug is unique
     existing_slug = db.execute(select(Tenant).where(Tenant.slug == slug)).scalar_one_or_none()
     if existing_slug:
         slug = f"{slug}-{user.id}"
