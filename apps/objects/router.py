@@ -12,13 +12,15 @@ from core.db.session import get_db
 from core.storage.factory import get_storage
 from apps.objects.schemas import RenameRequest
 from apps.objects.domain import (
-    attach_metadata, attach_storage, create_object, empty_trash,
-    get_object, list_objects, list_trash, move_object,
-    permanent_delete_object, rename_object, restore_object,
-    set_status, trash_object_recursive,
+    attach_metadata, attach_storage, create_object, create_share_link,
+    empty_trash, get_object, get_object_by_share_token, list_objects,
+    list_trash, move_object, permanent_delete_object, rename_object,
+    restore_object, set_status, trash_object_recursive,
 )
 
 router = APIRouter(prefix="/objects", tags=["objects"])
+share_router = APIRouter(tags=["share"])
+routers = [router, share_router]
 
 
 def _get_tenant_object(db: Session, obj_id: int, current_user: CurrentUser) -> dict:
@@ -143,3 +145,26 @@ def permanent_delete_object_api(obj_id: int, db: Session = Depends(get_db), curr
             except Exception:
                 pass
     return {"status": "deleted", "id": obj_id}
+
+
+@router.post("/{obj_id}/share")
+def create_share_link_api(obj_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    obj = _get_tenant_object(db, obj_id, current_user)
+    if obj["type"] == "folder":
+        raise HTTPException(status_code=400, detail="cannot share folders")
+    token = create_share_link(db, obj_id, current_user.id, current_user.tenant_id)
+    return {"token": token, "url": f"/share/{token}/download"}
+
+
+@share_router.get("/share/{token}/download")
+def share_download(token: str, db: Session = Depends(get_db)):
+    obj = get_object_by_share_token(db, token)
+    if not obj:
+        raise HTTPException(status_code=404, detail="link not found or expired")
+    storage = get_storage()
+    if not obj["storage"] or not storage.exists(obj["storage"]):
+        raise HTTPException(status_code=404, detail="file not found on storage")
+    if os.getenv("STORAGE_BACKEND", "local") == "minio":
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=storage.get_path(obj["storage"]))
+    return FileResponse(path=storage.get_path(obj["storage"]), filename=obj["name"], media_type="application/octet-stream")

@@ -91,6 +91,18 @@ function DriveView() {
     setRenameValue(item.name)
   }
 
+  function shareFile(id) {
+    authFetch(`${API_URL}/objects/${id}/share`, { method: "POST" })
+      .then(res => res.json())
+      .then(data => {
+        const url = `${API_URL}${data.url}`
+        navigator.clipboard.writeText(url)
+          .then(() => showToast("Link copied to clipboard"))
+          .catch(() => showToast(`Share link: ${url}`))
+      })
+      .catch(err => showToast(err.message))
+  }
+
   function submitRename(id) {
     if (!renameValue.trim()) { setRenamingId(null); return }
     authFetch(`${API_URL}/objects/${id}/rename`, {
@@ -193,9 +205,14 @@ function DriveView() {
                       Rename
                     </button>
                     {item.type !== "folder" && (
-                      <button className="text-sm text-blue-500 hover:underline" onClick={() => downloadFile(item.id, item.name)}>
-                        Download
-                      </button>
+                      <>
+                        <button className="text-sm text-blue-500 hover:underline" onClick={() => downloadFile(item.id, item.name)}>
+                          Download
+                        </button>
+                        <button className="text-sm text-green-500 hover:underline" onClick={() => shareFile(item.id)}>
+                          Share
+                        </button>
+                      </>
                     )}
                     <button className="text-sm text-red-400 hover:text-red-600" onClick={() => trashItem(item.id)}>
                       Delete

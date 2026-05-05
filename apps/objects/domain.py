@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, delete, desc, select, update
 from sqlalchemy.orm import Session
 
-from core.db.models import Object
+from core.db.models import Object, ShareLink
 
 
 def _utc_iso() -> str:
@@ -242,6 +243,46 @@ def trash_object_recursive(db: Session, obj_id: int) -> None:
         db.execute(update(Object).where(Object.id == current_id).values(deleted_at=now))
         queue.extend(get_children_ids(db, current_id))
     db.commit()
+
+
+def create_share_link(
+    db: Session,
+    obj_id: int,
+    created_by: int,
+    tenant_id: int,
+    expires_at: str | None = None,
+) -> str:
+    token = secrets.token_urlsafe(32)
+    link = ShareLink(
+        token=token,
+        object_id=obj_id,
+        tenant_id=tenant_id,
+        created_by=created_by,
+        expires_at=expires_at,
+        created_at=_utc_iso(),
+    )
+    db.add(link)
+    db.commit()
+    return token
+
+
+def get_object_by_share_token(db: Session, token: str) -> dict[str, Any] | None:
+    row = db.execute(
+        select(
+            ShareLink.expires_at,
+            Object.id, Object.name, Object.storage_key, Object.mime_type, Object.status,
+        )
+        .join(Object, Object.id == ShareLink.object_id)
+        .where(ShareLink.token == token)
+    ).one_or_none()
+    if not row:
+        return None
+    expires_at, obj_id, name, storage_key, mime_type, status = row
+    if expires_at and expires_at < _utc_iso():
+        return None
+    if status != "ready":
+        return None
+    return {"id": obj_id, "name": name, "storage": storage_key, "mime_type": mime_type}
 
 
 def recover_incomplete_uploads(db: Session, data_dir: str) -> dict[str, int]:

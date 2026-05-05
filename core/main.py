@@ -41,14 +41,16 @@ app.add_middleware(
 app.include_router(auth_router)
 
 # Load apps from ATLAS_ENABLED_APPS env — default to all built-in apps
-_enabled = os.getenv("ATLAS_ENABLED_APPS", "objects,drive,photos").split(",")
+_enabled = os.getenv("ATLAS_ENABLED_APPS", "objects,drive,photos,admin").split(",")
 for _app_name in _enabled:
     _app_name = _app_name.strip()
     if not _app_name:
         continue
     try:
         mod = importlib.import_module(f"apps.{_app_name}.router")
-        app.include_router(mod.router)
+        routers = getattr(mod, "routers", None) or [mod.router]
+        for r in routers:
+            app.include_router(r)
         print(f"[app] loaded: {_app_name}")
     except ImportError as e:
         print(f"[app] failed to load '{_app_name}': {e}")
