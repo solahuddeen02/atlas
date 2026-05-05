@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, delete, desc, select, update
@@ -12,7 +12,7 @@ from core.db.models import Object
 
 
 def _utc_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 # -------------------------
@@ -25,6 +25,7 @@ def create_object(
     name: str,
     parent_id: int | None = None,
     owner_id: int | None = None,
+    tenant_id: int | None = None,
     *,
     commit: bool = True,
 ) -> int:
@@ -37,6 +38,7 @@ def create_object(
         name=name,
         parent_id=parent_id,
         owner_id=owner_id,
+        tenant_id=tenant_id,
         created_at=_utc_iso(),
         status="uploading",
     )
@@ -150,18 +152,18 @@ def permanent_delete_object(db: Session, obj_id: int) -> str | None:
     return storage_key
 
 
-def empty_trash(db: Session, owner_id: int) -> list[str]:
-    """Delete all trashed objects for owner. Returns list of storage_keys to delete from storage."""
+def empty_trash(db: Session, tenant_id: int) -> list[str]:
+    """Delete all trashed objects in tenant. Returns list of storage_keys to delete from storage."""
     rows = db.execute(
         select(Object.storage_key).where(
-            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+            and_(Object.deleted_at.is_not(None), Object.tenant_id == tenant_id)
         )
     ).all()
     storage_keys = [r[0] for r in rows if r[0]]
 
     db.execute(
         delete(Object).where(
-            and_(Object.deleted_at.is_not(None), Object.owner_id == owner_id)
+            and_(Object.deleted_at.is_not(None), Object.tenant_id == tenant_id)
         )
     )
     db.commit()
@@ -180,6 +182,7 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         Object.storage_key,
         Object.status,
         Object.owner_id,
+        Object.tenant_id,
     ).where(Object.id == obj_id)
 
     row = db.execute(stmt).one_or_none()
@@ -193,6 +196,7 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         "storage": row[3],
         "status": row[4],
         "owner_id": row[5],
+        "tenant_id": row[6],
     }
 
 
@@ -201,16 +205,16 @@ def list_objects(
     obj_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-    owner_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
-        Object.status == "ready",  # hide incomplete uploads by default
+        Object.status == "ready",
     ]
     if obj_type:
         conditions.append(Object.type == obj_type)
-    if owner_id is not None:
-        conditions.append(Object.owner_id == owner_id)
+    if tenant_id is not None:
+        conditions.append(Object.tenant_id == tenant_id)
 
     stmt = (
         select(
@@ -250,7 +254,7 @@ def list_photos(
     limit: int = 20,
     offset: int = 0,
     q: str | None = None,
-    owner_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [
         Object.deleted_at.is_(None),
@@ -259,8 +263,8 @@ def list_photos(
     ]
     if q:
         conditions.append(Object.name.like(f"%{q}%"))
-    if owner_id is not None:
-        conditions.append(Object.owner_id == owner_id)
+    if tenant_id is not None:
+        conditions.append(Object.tenant_id == tenant_id)
 
     stmt = (
         select(
@@ -301,12 +305,14 @@ def create_folder(
     name: str,
     parent_id: int | None = None,
     owner_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> int:
     folder = Object(
         type="folder",
         name=name,
         parent_id=parent_id,
         owner_id=owner_id,
+        tenant_id=tenant_id,
         created_at=_utc_iso(),
         status="ready",
     )
@@ -319,7 +325,7 @@ def create_folder(
 def list_folder(
     db: Session,
     parent_id: int | None,
-    owner_id: int | None = None,
+    tenant_id: int | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -331,8 +337,8 @@ def list_folder(
         conditions.append(Object.parent_id.is_(None))
     else:
         conditions.append(Object.parent_id == parent_id)
-    if owner_id is not None:
-        conditions.append(Object.owner_id == owner_id)
+    if tenant_id is not None:
+        conditions.append(Object.tenant_id == tenant_id)
 
     stmt = (
         select(
@@ -366,14 +372,14 @@ def list_folder(
 
 
 def list_trash(
-    db: Session, 
-    limit: int = 20, 
+    db: Session,
+    limit: int = 20,
     offset: int = 0,
-    owner_id: int | None = None,
+    tenant_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [Object.deleted_at.is_not(None)]
-    if owner_id is not None:
-        conditions.append(Object.owner_id == owner_id)
+    if tenant_id is not None:
+        conditions.append(Object.tenant_id == tenant_id)
 
     stmt = (
         select(Object.id, Object.type, Object.name, Object.deleted_at, Object.status)

@@ -1,4 +1,3 @@
-# core/apps/auth/jwt.py
 from __future__ import annotations
 
 import os
@@ -22,11 +21,13 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(user_id: int, username: str) -> str:
+def create_access_token(user_id: int, username: str, tenant_id: int, role: str) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user_id),
         "username": username,
+        "tenant_id": tenant_id,
+        "role": role,
         "exp": expire,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)

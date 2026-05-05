@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from core.apps.auth.dependencies import get_current_user
-from core.db.models import User
+from core.apps.auth.dependencies import CurrentUser, get_current_user
 from core.db.session import get_db
 from core.domain.objects import list_photos
 
@@ -15,6 +14,6 @@ def list_photos_api(
     offset: int = 0,
     q: str | None = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    return list_photos(db, limit, offset, q, owner_id=current_user.id)
+    return list_photos(db, limit, offset, q, tenant_id=current_user.tenant_id)

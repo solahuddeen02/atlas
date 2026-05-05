@@ -1,5 +1,6 @@
-# core/apps/auth/dependencies.py
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,10 +14,18 @@ from core.db.session import get_db
 bearer = HTTPBearer()
 
 
+@dataclass
+class CurrentUser:
+    id: int
+    username: str
+    tenant_id: int
+    role: str
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
     db: Session = Depends(get_db),
-) -> User:
+) -> CurrentUser:
     payload = decode_access_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="invalid or expired token")
@@ -28,4 +37,13 @@ def get_current_user(
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="user not found or inactive")
 
-    return user
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="token missing tenant context")
+
+    return CurrentUser(
+        id=user.id,
+        username=user.username,
+        tenant_id=tenant_id,
+        role=payload.get("role", "member"),
+    )
