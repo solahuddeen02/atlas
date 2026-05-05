@@ -18,6 +18,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# DATABASE_URL env var overrides alembic.ini — required for Docker/PostgreSQL
+database_url = os.environ.get("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
+
 # add your model's MetaData object here
 # for 'autogenerate' support
 # from myapp import mymodel

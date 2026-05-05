@@ -1,18 +1,32 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: atlas
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   atlas:
     build: .
     ports:
       - "8000:8000"
     volumes:
       - atlas_data:/app/data
-      - atlas_db:/app/db
     environment:
+      - DATABASE_URL=postgresql://atlas:atlas@postgres:5432/atlas
       - ATLAS_DATA_DIR=data
-      - DATABASE_URL=sqlite:///./db/atlas.db
       - SECRET_KEY=change-this-in-production
-      - STORAGE_BACKEND=local
+      - ATLAS_STORAGE_BACKEND=local
     depends_on:
-      - minio
+      postgres:
+        condition: service_healthy
 
   minio:
     image: minio/minio
@@ -27,6 +41,6 @@ services:
     command: server /data --console-address ":9001"
 
 volumes:
+  postgres_data:
   atlas_data:
-  atlas_db:
   minio_data:
