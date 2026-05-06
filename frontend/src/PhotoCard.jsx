@@ -7,7 +7,7 @@ function PhotoCard({ photo, onClick, onDelete }) {
 
     useEffect(() => {
         let objectUrl = null
-        authFetch(`${API_URL}/objects/${photo.id}/download`)
+        authFetch(`${API_URL}/objects/${photo.id}/thumbnail`)
             .then(res => res.blob())
             .then(blob => {
                 objectUrl = URL.createObjectURL(blob)

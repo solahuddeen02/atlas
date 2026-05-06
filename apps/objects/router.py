@@ -17,6 +17,7 @@ from apps.objects.domain import (
     list_trash, move_object, permanent_delete_object, rename_object,
     restore_object, set_status, trash_object_recursive,
 )
+from apps.objects.thumbnail import make_thumbnail
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 share_router = APIRouter(tags=["share"])
@@ -53,6 +54,16 @@ def upload_object(
         attach_metadata(db, obj_id, size, file.content_type, created_at, commit=False)
         set_status(db, obj_id, "ready", commit=False)
         db.commit()
+
+        if file.content_type and file.content_type.startswith("image/"):
+            try:
+                file.file.seek(0)
+                thumb = make_thumbnail(file.file)
+                if thumb:
+                    storage.save_thumb(obj_id, thumb)
+            except Exception:
+                pass
+
         return {"id": obj_id, "name": name, "size": size, "mime_type": file.content_type, "created_at": created_at, "status": "ready"}
 
     except Exception as e:
@@ -68,6 +79,20 @@ def upload_object(
             except Exception:
                 pass
         raise HTTPException(status_code=500, detail=f"upload failed: {type(e).__name__}")
+
+
+@router.get("/{obj_id}/thumbnail")
+def get_thumbnail(obj_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    obj = _get_tenant_object(db, obj_id, current_user)
+    storage = get_storage()
+    if storage.thumb_exists(obj_id):
+        if os.getenv("STORAGE_BACKEND", "local") == "minio":
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=storage.get_thumb_path(obj_id))
+        return FileResponse(path=storage.get_thumb_path(obj_id), media_type="image/jpeg")
+    if not obj["storage"] or not storage.exists(obj["storage"]):
+        raise HTTPException(status_code=404, detail="file not found on storage")
+    return FileResponse(path=storage.get_path(obj["storage"]), filename=obj["name"], media_type=obj["mime_type"] or "application/octet-stream")
 
 
 @router.get("/{obj_id}/download")

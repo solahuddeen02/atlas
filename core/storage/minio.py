@@ -64,10 +64,29 @@ class MinIOStorage(StorageBackend):
             return False
 
     def get_path(self, storage_key: str) -> str:
-        # return presigned URL สำหรับ download
         from datetime import timedelta
         return self.client.presigned_get_object(
             self.bucket,
             storage_key,
             expires=timedelta(hours=1),
+        )
+
+    def save_thumb(self, obj_id: int, data: bytes) -> None:
+        import io
+        self.client.put_object(
+            self.bucket, f"thumbs/{obj_id}.jpg",
+            io.BytesIO(data), length=len(data), content_type="image/jpeg",
+        )
+
+    def thumb_exists(self, obj_id: int) -> bool:
+        try:
+            self.client.stat_object(self.bucket, f"thumbs/{obj_id}.jpg")
+            return True
+        except Exception:
+            return False
+
+    def get_thumb_path(self, obj_id: int) -> str:
+        from datetime import timedelta
+        return self.client.presigned_get_object(
+            self.bucket, f"thumbs/{obj_id}.jpg", expires=timedelta(hours=1),
         )

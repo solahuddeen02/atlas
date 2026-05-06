@@ -50,6 +50,20 @@ class LocalStorage(StorageBackend):
     def get_path(self, storage_key: str) -> str:
         return storage_key
 
+    def _thumb_path(self, obj_id: int) -> Path:
+        return self.data_dir / "thumbs" / f"{obj_id}.jpg"
+
+    def save_thumb(self, obj_id: int, data: bytes) -> None:
+        p = self._thumb_path(obj_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+
+    def thumb_exists(self, obj_id: int) -> bool:
+        return self._thumb_path(obj_id).exists()
+
+    def get_thumb_path(self, obj_id: int) -> str:
+        return str(self._thumb_path(obj_id))
+
 
 # backward-compatible function สำหรับ code เดิมที่ยังใช้อยู่
 def save_file(object_id: int, src: BinaryIO) -> Tuple[str, int]:
