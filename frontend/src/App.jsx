@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import Sidebar from './Sidebar'
 import LoginPage from './LoginPage'
+import JoinView from './JoinView'
 import { APPS } from './apps'
+
+const joinToken = new URLSearchParams(window.location.search).get("token")
 
 function App() {
   const [activeItem, setActiveItem] = useState(APPS[0].id)
@@ -12,6 +15,7 @@ function App() {
     setToken(null)
   }
 
+  if (joinToken && !token) return <JoinView token={joinToken} onJoin={setToken} />
   if (!token) return <LoginPage onLogin={setToken} />
 
   const ActiveComponent = APPS.find(a => a.id === activeItem)?.component

@@ -32,11 +32,31 @@ function ManagementView() {
       .catch(err => showToast(err.message))
   }, [])
 
+  function inviteMember() {
+    authFetch(`${API_URL}/tenant/invite`, { method: "POST" })
+      .then(res => res.json())
+      .then(data => {
+        const url = `${window.location.origin}${data.url}`
+        navigator.clipboard.writeText(url)
+          .then(() => showToast("Invite link copied to clipboard"))
+          .catch(() => showToast(`Invite link: ${url}`))
+      })
+      .catch(err => showToast(err.message))
+  }
+
   if (!stats) return <p className="text-gray-400 text-sm">Loading...</p>
 
   return (
     <div className="flex flex-col gap-6">
-      <h2 className="text-lg font-semibold text-gray-700">Overview</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-700">Overview</h2>
+        <button
+          onClick={inviteMember}
+          className="text-sm bg-blue-500 text-white px-3 py-1.5 rounded hover:bg-blue-600"
+        >
+          Invite member
+        </button>
+      </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <StatCard label="Members" value={stats.members} />
         <StatCard label="Storage used" value={formatBytes(stats.storage_used)} />
