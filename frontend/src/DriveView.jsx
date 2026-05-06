@@ -18,12 +18,19 @@ function DriveView() {
 
   const showToast = useToast()
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id
+  const [debouncedQ, setDebouncedQ] = useState("")
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300)
+    return () => clearTimeout(t)
+  }, [q])
 
   function fetchItems(off = 0, append = false) {
     const base = currentFolderId === null
       ? `${API_URL}/drive/root`
       : `${API_URL}/folders/${currentFolderId}`
-    authFetch(`${base}?limit=${LIMIT}&offset=${off}`)
+    const qParam = debouncedQ ? `&q=${encodeURIComponent(debouncedQ)}` : ""
+    authFetch(`${base}?limit=${LIMIT}&offset=${off}${qParam}`)
       .then(res => res.json())
       .then(data => {
         setItems(prev => append ? [...prev, ...data] : data)
@@ -33,7 +40,7 @@ function DriveView() {
       .catch(err => showToast(err.message))
   }
 
-  useEffect(() => { setItems([]); setOffset(0); fetchItems(0, false) }, [currentFolderId])
+  useEffect(() => { setItems([]); setOffset(0); fetchItems(0, false) }, [currentFolderId, debouncedQ])
 
   function loadMore() { fetchItems(offset, true) }
 
@@ -45,13 +52,13 @@ function DriveView() {
   }
 
   function openFolder(id, name) {
+    setQ(""); setDebouncedQ("")
     setBreadcrumb(prev => [...prev, { id, name }])
-    setQ("")
   }
 
   function navigateTo(index) {
+    setQ(""); setDebouncedQ("")
     setBreadcrumb(prev => prev.slice(0, index + 1))
-    setQ("")
   }
 
   function trashItem(id) {
@@ -114,10 +121,6 @@ function DriveView() {
       .catch(err => { showToast(err.message); setRenamingId(null) })
   }
 
-  const filtered = q
-    ? items.filter(f => f.name.toLowerCase().includes(q.toLowerCase()))
-    : items
-
   return (
     <div className="flex flex-col gap-3">
 
@@ -172,11 +175,11 @@ function DriveView() {
       )}
 
       {/* Item list */}
-      {filtered.length === 0
-        ? <p className="text-gray-500">No files found.</p>
+      {items.length === 0
+        ? <p className="text-gray-500">{debouncedQ ? "No files match." : "No files found."}</p>
         : (
           <div className="grid grid-cols-1 gap-2">
-            {filtered.map(item => (
+            {items.map(item => (
               <div key={item.id} className="bg-white rounded shadow px-4 py-3 flex justify-between items-center">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   <span>{item.type === "folder" ? "📁" : "📄"}</span>
@@ -224,7 +227,7 @@ function DriveView() {
           </div>
         )
       }
-      {hasMore && !q && (
+      {hasMore && (
         <button
           className="text-sm text-gray-500 hover:underline text-center py-2"
           onClick={loadMore}

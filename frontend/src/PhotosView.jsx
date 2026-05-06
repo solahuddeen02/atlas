@@ -12,10 +12,17 @@ function PhotosView() {
     const [selected, setSelected] = useState(null)
     const [imgSrc, setImgSrc] = useState(null)
     const [q, setQ] = useState("")
+    const [debouncedQ, setDebouncedQ] = useState("")
     const showToast = useToast()
 
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedQ(q), 300)
+        return () => clearTimeout(t)
+    }, [q])
+
     function loadPhotos(off = 0, append = false) {
-        authFetch(`${API_URL}/photos?limit=${LIMIT}&offset=${off}`)
+        const qParam = debouncedQ ? `&q=${encodeURIComponent(debouncedQ)}` : ""
+        authFetch(`${API_URL}/photos?limit=${LIMIT}&offset=${off}${qParam}`)
             .then(res => res.json())
             .then(data => {
                 setPhotos(prev => append ? [...prev, ...data] : data)
@@ -25,7 +32,7 @@ function PhotosView() {
             .catch(err => showToast(err.message))
     }
 
-    useEffect(() => { loadPhotos(0, false) }, [])
+    useEffect(() => { setOffset(0); loadPhotos(0, false) }, [debouncedQ])
 
     function openPhoto(photo) {
         setSelected(photo)
@@ -47,14 +54,6 @@ function PhotosView() {
             .catch(err => showToast(err.message))
     }
 
-    const filtered = q
-        ? photos.filter(p => p.name.toLowerCase().includes(q.toLowerCase()))
-        : photos
-
-    if (photos.length === 0) {
-        return <p className="text-center text-gray-500">No photos found.</p>
-    }
-
     return (
         <>
             <input
@@ -64,11 +63,11 @@ function PhotosView() {
                 onChange={e => setQ(e.target.value)}
             />
 
-            {filtered.length === 0 ? (
-                <p className="text-center text-gray-500">No photos match.</p>
+            {photos.length === 0 ? (
+                <p className="text-center text-gray-500">{debouncedQ ? "No photos match." : "No photos found."}</p>
             ) : (
                 <div className="grid grid-cols-3 gap-4">
-                    {filtered.map(photo => (
+                    {photos.map(photo => (
                         <PhotoCard
                             key={photo.id}
                             photo={photo}
@@ -78,7 +77,7 @@ function PhotosView() {
                     ))}
                 </div>
             )}
-            {hasMore && !q && (
+            {hasMore && (
                 <button
                     className="text-sm text-gray-500 hover:underline text-center py-2 w-full"
                     onClick={() => loadPhotos(offset, true)}

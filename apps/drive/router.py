@@ -12,8 +12,8 @@ router = APIRouter(tags=["drive"])
 
 
 @router.get("/drive/root")
-def drive_root(limit: int = 20, offset: int = 0, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
-    return list_folder(db, None, tenant_id=current_user.tenant_id, limit=limit, offset=offset)
+def drive_root(limit: int = 20, offset: int = 0, q: str | None = None, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    return list_folder(db, None, tenant_id=current_user.tenant_id, limit=limit, offset=offset, q=q)
 
 
 @router.post("/folders")
@@ -23,5 +23,5 @@ def create_folder_api(body: CreateFolderRequest, db: Session = Depends(get_db), 
 
 
 @router.get("/folders/{folder_id}")
-def list_folder_api(folder_id: int, limit: int = 20, offset: int = 0, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
-    return list_folder(db, folder_id, tenant_id=current_user.tenant_id, limit=limit, offset=offset)
+def list_folder_api(folder_id: int, limit: int = 20, offset: int = 0, q: str | None = None, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    return list_folder(db, folder_id, tenant_id=current_user.tenant_id, limit=limit, offset=offset, q=q)

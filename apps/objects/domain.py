@@ -194,11 +194,14 @@ def list_folder(
     tenant_id: int | None = None,
     limit: int = 20,
     offset: int = 0,
+    q: str | None = None,
 ) -> list[dict[str, Any]]:
     conditions = [Object.deleted_at.is_(None), Object.status == "ready"]
     conditions.append(Object.parent_id.is_(None) if parent_id is None else Object.parent_id == parent_id)
     if tenant_id is not None:
         conditions.append(Object.tenant_id == tenant_id)
+    if q:
+        conditions.append(Object.name.like(f"%{q}%"))
 
     rows = db.execute(
         select(Object.id, Object.type, Object.name, Object.size, Object.mime_type, Object.created_at, Object.status)
