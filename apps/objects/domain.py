@@ -269,6 +269,23 @@ def create_share_link(
     return token
 
 
+def list_share_links(db: Session, obj_id: int, tenant_id: int) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(ShareLink.token, ShareLink.created_at, ShareLink.expires_at)
+        .where(and_(ShareLink.object_id == obj_id, ShareLink.tenant_id == tenant_id))
+        .order_by(desc(ShareLink.created_at))
+    ).all()
+    return [{"token": r[0], "created_at": r[1], "expires_at": r[2], "url": f"/share/{r[0]}/download"} for r in rows]
+
+
+def revoke_share_link(db: Session, token: str, tenant_id: int) -> bool:
+    result = db.execute(
+        delete(ShareLink).where(and_(ShareLink.token == token, ShareLink.tenant_id == tenant_id))
+    )
+    db.commit()
+    return result.rowcount > 0
+
+
 def get_object_by_share_token(db: Session, token: str) -> dict[str, Any] | None:
     row = db.execute(
         select(

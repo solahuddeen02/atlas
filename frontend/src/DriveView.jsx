@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { authFetch } from "./api"
 import { API_URL } from "./config"
 import UploadButton from "./UploadButton"
+import ShareModal from "./ShareModal"
 import { useToast } from "./Toast"
 
 function DriveView() {
@@ -15,6 +16,7 @@ function DriveView() {
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [renamingId, setRenamingId] = useState(null)
   const [renameValue, setRenameValue] = useState("")
+  const [sharingFile, setSharingFile] = useState(null)
 
   const showToast = useToast()
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id
@@ -98,16 +100,8 @@ function DriveView() {
     setRenameValue(item.name)
   }
 
-  function shareFile(id) {
-    authFetch(`${API_URL}/objects/${id}/share`, { method: "POST" })
-      .then(res => res.json())
-      .then(data => {
-        const url = `${API_URL}${data.url}`
-        navigator.clipboard.writeText(url)
-          .then(() => showToast("Link copied to clipboard"))
-          .catch(() => showToast(`Share link: ${url}`))
-      })
-      .catch(err => showToast(err.message))
+  function shareFile(item) {
+    setSharingFile(item)
   }
 
   function submitRename(id) {
@@ -122,6 +116,7 @@ function DriveView() {
   }
 
   return (
+    <>
     <div className="flex flex-col gap-3">
 
       {/* Breadcrumb */}
@@ -212,7 +207,7 @@ function DriveView() {
                         <button className="text-sm text-blue-500 hover:underline" onClick={() => downloadFile(item.id, item.name)}>
                           Download
                         </button>
-                        <button className="text-sm text-green-500 hover:underline" onClick={() => shareFile(item.id)}>
+                        <button className="text-sm text-green-500 hover:underline" onClick={() => shareFile(item)}>
                           Share
                         </button>
                       </>
@@ -236,6 +231,9 @@ function DriveView() {
         </button>
       )}
     </div>
+
+    {sharingFile && <ShareModal file={sharingFile} onClose={() => setSharingFile(null)} />}
+    </>
   )
 }
 

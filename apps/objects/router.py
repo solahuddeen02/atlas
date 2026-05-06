@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session
 from core.auth.dependencies import CurrentUser, get_current_user
 from core.db.session import get_db
 from core.storage.factory import get_storage
-from apps.objects.schemas import RenameRequest
+from apps.objects.schemas import RenameRequest, ShareRequest
 from apps.objects.domain import (
     attach_metadata, attach_storage, create_object, create_share_link,
     empty_trash, get_object, get_object_by_share_token, list_objects,
-    list_trash, move_object, permanent_delete_object, rename_object,
-    restore_object, set_status, trash_object_recursive,
+    list_share_links, list_trash, move_object, permanent_delete_object,
+    rename_object, restore_object, revoke_share_link, set_status,
+    trash_object_recursive,
 )
 from apps.objects.thumbnail import make_thumbnail
 
@@ -172,13 +173,30 @@ def permanent_delete_object_api(obj_id: int, db: Session = Depends(get_db), curr
     return {"status": "deleted", "id": obj_id}
 
 
+@router.get("/{obj_id}/shares")
+def list_shares_api(obj_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    _get_tenant_object(db, obj_id, current_user)
+    return list_share_links(db, obj_id, current_user.tenant_id)
+
+
 @router.post("/{obj_id}/share")
-def create_share_link_api(obj_id: int, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+def create_share_link_api(obj_id: int, body: ShareRequest = ShareRequest(), db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
     obj = _get_tenant_object(db, obj_id, current_user)
     if obj["type"] == "folder":
         raise HTTPException(status_code=400, detail="cannot share folders")
-    token = create_share_link(db, obj_id, current_user.id, current_user.tenant_id)
-    return {"token": token, "url": f"/share/{token}/download"}
+    expires_at = None
+    if body.expires_in_days:
+        from datetime import timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)).isoformat()
+    token = create_share_link(db, obj_id, current_user.id, current_user.tenant_id, expires_at=expires_at)
+    return {"token": token, "url": f"/share/{token}/download", "expires_at": expires_at}
+
+
+@share_router.delete("/share/{token}")
+def revoke_share_link_api(token: str, db: Session = Depends(get_db), current_user: CurrentUser = Depends(get_current_user)):
+    if not revoke_share_link(db, token, current_user.tenant_id):
+        raise HTTPException(status_code=404, detail="link not found")
+    return {"status": "revoked"}
 
 
 @share_router.get("/share/{token}/download")
