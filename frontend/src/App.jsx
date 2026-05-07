@@ -1,40 +1,50 @@
-import { useState } from 'react'
-import Sidebar from './Sidebar'
-import LoginPage from './LoginPage'
-import JoinView from './JoinView'
-import { APPS } from './apps'
-
-const joinToken = new URLSearchParams(window.location.search).get("token")
+import { useState } from "react"
+import { Routes, Route, Navigate } from "react-router-dom"
+import { APPS } from "./apps"
+import { decodeToken, hasRole } from "./auth"
+import Launcher from "./Launcher"
+import AppShell from "./AppShell"
+import LoginPage from "./LoginPage"
+import JoinView from "./JoinView"
 
 function App() {
-  const [activeItem, setActiveItem] = useState(APPS[0].id)
   const [token, setToken] = useState(localStorage.getItem("token"))
+  const user = decodeToken(token)
+
+  function login(t) {
+    localStorage.setItem("token", t)
+    setToken(t)
+  }
 
   function logout() {
     localStorage.removeItem("token")
     setToken(null)
   }
 
-  if (joinToken && !token) return <JoinView token={joinToken} onJoin={setToken} />
-  if (!token) return <LoginPage onLogin={setToken} />
+  if (!token) {
+    const joinToken = new URLSearchParams(window.location.search).get("token")
+    if (joinToken) return <JoinView token={joinToken} onJoin={login} />
+    return <LoginPage onLogin={login} />
+  }
 
-  const ActiveComponent = APPS.find(a => a.id === activeItem)?.component
+  const visibleApps = APPS.filter(a => !a.minRole || hasRole(user?.role, a.minRole))
 
   return (
-    <div className="flex h-screen">
-      <Sidebar activeItem={activeItem} setActiveItem={setActiveItem} />
-      <div className="flex-1 bg-gray-100 p-4 overflow-auto">
-        <div className="flex justify-end mb-4">
-          <button
-            className="text-sm text-gray-500 hover:text-red-500"
-            onClick={logout}
-          >
-            Logout
-          </button>
-        </div>
-        {ActiveComponent && <ActiveComponent />}
-      </div>
-    </div>
+    <Routes>
+      <Route path="/" element={<Launcher user={user} onLogout={logout} />} />
+      {visibleApps.map(app => (
+        <Route
+          key={app.id}
+          path={app.path}
+          element={
+            <AppShell label={app.label} icon={app.icon} onLogout={logout}>
+              <app.component />
+            </AppShell>
+          }
+        />
+      ))}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
 

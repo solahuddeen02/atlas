@@ -4,6 +4,10 @@ manifest = {"name": "objects", "version": "1.0"}
 routers = [router, share_router]
 
 
+def migrate(engine):
+    pass  # uses core tables (objects, share_links)
+
+
 def startup(db):
     import os
     from core.bus import bus

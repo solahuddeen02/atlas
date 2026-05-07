@@ -61,6 +61,16 @@ class ShareLink(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class InstalledPlugin(Base):
+    __tablename__ = "installed_plugins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    package: Mapped[str | None] = mapped_column(Text, nullable=True)  # pip package name if external
+    installed_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class Object(Base):
     __tablename__ = "objects"
 
