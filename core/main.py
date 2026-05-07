@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from core.config import ATLAS_DOMAIN
 from core.auth.router import router as auth_router
+from core.admin.router import router as admin_router
+from core.system.router import router as system_router
+from core.tenant.router import router as tenant_router
 from core.db.init import init_db
 from core.db.session import SessionLocal
 from core.db.engine import engine
 from core.runtime import get_runtime
 import core.plugin_loader as plugin_loader
 
-_enabled = os.getenv("ATLAS_ENABLED_PLUGINS", "objects,drive,photos,admin,tenant").split(",")
+_enabled = os.getenv("ATLAS_ENABLED_PLUGINS", "objects,drive,photos").split(",")
 _plugin_names = [n.strip() for n in _enabled if n.strip()]
 _plugin_mods: list[tuple] = []
 
@@ -44,14 +49,20 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Atlas", lifespan=lifespan)
 
+_domain_re = re.escape(ATLAS_DOMAIN)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=rf"https?://(localhost(:\d+)?|(.+\.)?{_domain_re}(:\d+)?)",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Core routers — always mounted, not plugin-controlled
 app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(system_router)
+app.include_router(tenant_router)
 
 
 @app.get("/health")

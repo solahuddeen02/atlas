@@ -77,6 +77,8 @@ class InstalledPlugin(Base):
     runtime: Mapped[str] = mapped_column(Text, nullable=False, default="inprocess")
     # port used by subprocess/container runtimes (null for inprocess)
     port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # JSON list of plugin names this plugin depends on e.g. '["objects"]'
+    dependencies: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
 
 class Object(Base):

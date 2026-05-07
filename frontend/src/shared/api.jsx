@@ -1,10 +1,9 @@
 export async function authFetch(url, options = {}) {
-    const token = localStorage.getItem("token")
     const res = await fetch(url, {
         ...options,
+        credentials: "include",   // send cookie on every request
         headers: {
             ...options.headers,
-            Authorization: `Bearer ${token}`,
         },
     })
     if (!res.ok) {

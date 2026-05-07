@@ -1,11 +1,11 @@
 import { useState } from "react"
-import { API_URL } from "./config"
+import { API_URL } from "../shared/config"
 
 function JoinView({ token, onJoin }) {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(false)
+  const [error, setError]       = useState(null)
+  const [loading, setLoading]   = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -14,14 +14,13 @@ function JoinView({ token, onJoin }) {
     try {
       const res = await fetch(`${API_URL}/tenant/join`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, username, password }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? "join failed")
-      localStorage.setItem("token", data.access_token)
-      window.history.replaceState({}, "", "/")
-      onJoin(data.access_token)
+      onJoin({ username, role: data.role ?? "member" })
     } catch (err) {
       setError(err.message)
     } finally {

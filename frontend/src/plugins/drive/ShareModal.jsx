@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
-import { authFetch } from "./api"
-import { API_URL } from "./config"
-import { useToast } from "./Toast"
+import { authFetch } from "../../shared/api"
+import { API_URL } from "../../shared/config"
+import { useToast } from "../../shared/Toast"
 
 const EXPIRY_OPTIONS = [
   { label: "No expiry", value: null },
@@ -66,7 +66,6 @@ function ShareModal({ file, onClose }) {
           <button className="text-gray-400 hover:text-gray-600 text-lg" onClick={onClose}>✕</button>
         </div>
 
-        {/* Create new link */}
         <div className="flex gap-2">
           <select
             className="border rounded px-2 py-1.5 text-sm flex-1"
@@ -86,7 +85,6 @@ function ShareModal({ file, onClose }) {
           </button>
         </div>
 
-        {/* Existing links */}
         {links.length === 0
           ? <p className="text-sm text-gray-400 text-center py-2">No share links yet.</p>
           : (

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
-import { authFetch } from "./api"
-import { API_URL } from "./config"
+import { authFetch } from "../../shared/api"
+import { API_URL } from "../../shared/config"
+import { useToast } from "../../shared/Toast"
 import PhotoCard from "./PhotoCard"
-import { useToast } from "./Toast"
 
 function PhotosView() {
     const LIMIT = 20

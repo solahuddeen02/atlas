@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
-import { authFetch } from "./api"
-import { API_URL } from "./config"
+import { authFetch } from "../../shared/api"
+import { API_URL } from "../../shared/config"
 
 function PhotoCard({ photo, onClick, onDelete }) {
     const [thumbSrc, setThumbSrc] = useState(null)

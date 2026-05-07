@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react"
-import { authFetch } from "./api"
-import { API_URL } from "./config"
+import { authFetch } from "../../shared/api"
+import { API_URL } from "../../shared/config"
+import { useToast } from "../../shared/Toast"
 import UploadButton from "./UploadButton"
 import ShareModal from "./ShareModal"
-import { useToast } from "./Toast"
 
 function DriveView() {
   const LIMIT = 20
@@ -98,10 +98,6 @@ function DriveView() {
   function startRename(item) {
     setRenamingId(item.id)
     setRenameValue(item.name)
-  }
-
-  function shareFile(item) {
-    setSharingFile(item)
   }
 
   function submitRename(id) {
@@ -207,7 +203,7 @@ function DriveView() {
                         <button className="text-sm text-blue-500 hover:underline" onClick={() => downloadFile(item.id, item.name)}>
                           Download
                         </button>
-                        <button className="text-sm text-green-500 hover:underline" onClick={() => shareFile(item)}>
+                        <button className="text-sm text-green-500 hover:underline" onClick={() => setSharingFile(item)}>
                           Share
                         </button>
                       </>

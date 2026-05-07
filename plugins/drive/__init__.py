@@ -1,6 +1,6 @@
 from plugins.drive.router import router
 
-manifest = {"name": "drive", "version": "1.0"}
+manifest = {"name": "drive", "version": "1.0", "depends_on": ["objects"]}
 routers = [router]
 
 

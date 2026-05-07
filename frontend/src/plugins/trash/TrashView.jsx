@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
-import { authFetch } from "./api"
-import { API_URL } from "./config"
-import { useToast } from "./Toast"
+import { authFetch } from "../../shared/api"
+import { API_URL } from "../../shared/config"
+import { useToast } from "../../shared/Toast"
 
 function TrashView() {
   const LIMIT = 20
