@@ -61,6 +61,7 @@ def list_plugins(db: Session = Depends(get_db), current_user: CurrentUser = Depe
 
 class InstallRequest(BaseModel):
     name: str
+    runtime: str = "inprocess"
 
 
 @router.post("/plugins/install")
@@ -72,11 +73,15 @@ def install_plugin(
 ):
     _require_admin(current_user)
     try:
-        return plugin_loader.runtime_install(body.name, db, engine=engine, app=request.app)
+        return plugin_loader.runtime_install(
+            body.name, db, engine=engine, app=request.app, runtime_mode=body.runtime
+        )
     except subprocess.CalledProcessError:
         raise HTTPException(status_code=422, detail=f"pip install failed for 'atlas-plugin-{body.name}'")
     except ImportError:
         raise HTTPException(status_code=404, detail=f"plugin '{body.name}' not found")
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -10,11 +10,12 @@ from core.auth.router import router as auth_router
 from core.db.init import init_db
 from core.db.session import SessionLocal
 from core.db.engine import engine
+from core.runtime import get_runtime
 import core.plugin_loader as plugin_loader
 
 _enabled = os.getenv("ATLAS_ENABLED_PLUGINS", "objects,drive,photos,admin,tenant").split(",")
 _plugin_names = [n.strip() for n in _enabled if n.strip()]
-_plugin_mods = []
+_plugin_mods: list[tuple] = []
 
 for _name in _plugin_names:
     try:
@@ -30,8 +31,12 @@ async def lifespan(_: FastAPI):
     try:
         for mod, name in _plugin_mods:
             plugin_loader.install(name, db, engine=engine)
-            if hasattr(mod, "startup"):
-                mod.startup(db)
+            mode = plugin_loader.get_installed_runtime(name, db)
+            runtime = get_runtime(mode)
+            for r in runtime.get_routers(name, mod):
+                app.include_router(r)
+            runtime.start(name, mod, db)
+            print(f"[plugin] loaded: {name} [{mode}]")
     finally:
         db.close()
     yield
@@ -47,11 +52,6 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-
-for mod, name in _plugin_mods:
-    for r in plugin_loader.get_routers(mod):
-        app.include_router(r)
-    print(f"[plugin] loaded: {name}")
 
 
 @app.get("/health")

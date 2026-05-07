@@ -31,8 +31,8 @@ def _pip_install(package: str) -> None:
     )
 
 
-def install(name: str, db: Session, engine: Any = None) -> dict:
-    """Migrate + register in DB. Used at startup for pre-loaded plugins."""
+def install(name: str, db: Session, engine: Any = None, runtime_mode: str = "inprocess") -> dict:
+    """Migrate + register plugin in DB. Used at startup for pre-loaded plugins."""
     from core.db.models import InstalledPlugin
     from sqlalchemy import select
 
@@ -47,28 +47,46 @@ def install(name: str, db: Session, engine: Any = None) -> dict:
         mod.migrate(engine)
 
     if existing:
-        return {"name": name, "version": existing.version, "status": "already_installed"}
+        return {"name": name, "version": existing.version, "runtime": existing.runtime, "status": "already_installed"}
 
     db.add(InstalledPlugin(
         name=name,
         version=manifest.get("version", "0.0"),
         package=manifest.get("package"),
         installed_at=_utc_iso(),
+        runtime=runtime_mode,
     ))
     db.commit()
-    return {"name": name, "version": manifest.get("version", "0.0"), "status": "installed"}
+    return {"name": name, "version": manifest.get("version", "0.0"), "runtime": runtime_mode, "status": "installed"}
 
 
-def runtime_install(name: str, db: Session, engine: Any = None, app: Any = None) -> dict:
-    """Full runtime install: pip install if needed → migrate → startup → mount routes."""
+def get_installed_runtime(name: str, db: Session) -> str:
+    """Return the runtime mode stored in DB for an installed plugin."""
     from core.db.models import InstalledPlugin
+    from sqlalchemy import select
+    row = db.execute(
+        select(InstalledPlugin).where(InstalledPlugin.name == name)
+    ).scalar_one_or_none()
+    return row.runtime if row else "inprocess"
+
+
+def runtime_install(
+    name: str,
+    db: Session,
+    engine: Any = None,
+    app: Any = None,
+    runtime_mode: str = "inprocess",
+) -> dict:
+    """Full runtime install: pip install if needed → migrate → start → mount routes."""
+    from core.db.models import InstalledPlugin
+    from core.runtime import get_runtime
     from sqlalchemy import select
 
     existing = db.execute(
         select(InstalledPlugin).where(InstalledPlugin.name == name)
     ).scalar_one_or_none()
     if existing:
-        return {"name": name, "version": existing.version, "status": "already_installed"}
+        return {"name": name, "version": existing.version, "runtime": existing.runtime, "status": "already_installed"}
 
     try:
         mod = load_module(name)
@@ -81,11 +99,11 @@ def runtime_install(name: str, db: Session, engine: Any = None, app: Any = None)
     if engine and hasattr(mod, "migrate"):
         mod.migrate(engine)
 
-    if hasattr(mod, "startup"):
-        mod.startup(db)
+    runtime = get_runtime(runtime_mode)
+    runtime.start(name, mod, db)
 
     if app is not None:
-        for r in get_routers(mod):
+        for r in runtime.get_routers(name, mod):
             app.include_router(r)
         app.openapi_schema = None
 
@@ -94,9 +112,10 @@ def runtime_install(name: str, db: Session, engine: Any = None, app: Any = None)
         version=manifest.get("version", "0.0"),
         package=manifest.get("package"),
         installed_at=_utc_iso(),
+        runtime=runtime_mode,
     ))
     db.commit()
-    return {"name": name, "version": manifest.get("version", "0.0"), "status": "installed"}
+    return {"name": name, "version": manifest.get("version", "0.0"), "runtime": runtime_mode, "status": "installed"}
 
 
 def uninstall(name: str, db: Session) -> dict:
@@ -119,8 +138,14 @@ def list_installed(db: Session) -> list[dict]:
     from core.db.models import InstalledPlugin
     from sqlalchemy import select
     rows = db.execute(select(InstalledPlugin)).scalars().all()
-    return [{"name": r.name, "version": r.version, "package": r.package, "installed_at": r.installed_at} for r in rows]
-
-
-def get_routers(mod: ModuleType) -> list:
-    return getattr(mod, "routers", [])
+    return [
+        {
+            "name": r.name,
+            "version": r.version,
+            "package": r.package,
+            "runtime": r.runtime,
+            "port": r.port,
+            "installed_at": r.installed_at,
+        }
+        for r in rows
+    ]

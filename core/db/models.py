@@ -14,6 +14,10 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     created_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # isolated mode: point to a dedicated database URL for this tenant
+    db_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # override storage root (e.g. separate MinIO bucket or local path)
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TenantMember(Base):
@@ -67,8 +71,12 @@ class InstalledPlugin(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     version: Mapped[str] = mapped_column(Text, nullable=False)
-    package: Mapped[str | None] = mapped_column(Text, nullable=True)  # pip package name if external
+    package: Mapped[str | None] = mapped_column(Text, nullable=True)
     installed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    # runtime: inprocess | subprocess | container
+    runtime: Mapped[str] = mapped_column(Text, nullable=False, default="inprocess")
+    # port used by subprocess/container runtimes (null for inprocess)
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Object(Base):

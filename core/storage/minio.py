@@ -16,6 +16,7 @@ class MinIOStorage(StorageBackend):
         secret_key: str | None = None,
         bucket: str | None = None,
         secure: bool = False,
+        tenant_slug: str | None = None,
     ):
         try:
             from minio import Minio
@@ -32,6 +33,8 @@ class MinIOStorage(StorageBackend):
             secret_key=secret_key or os.getenv("MINIO_SECRET_KEY", "minioadmin"),
             secure=secure,
         )
+        # Namespace all keys under tenant_slug/ for multi-tenant isolation
+        self._prefix = f"{tenant_slug}/" if tenant_slug else ""
         self._ensure_bucket()
 
     def _ensure_bucket(self) -> None:
@@ -39,18 +42,11 @@ class MinIOStorage(StorageBackend):
             self.client.make_bucket(self.bucket)
 
     def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
-        # อ่านข้อมูลก่อนเพื่อรู้ขนาด
+        import io
         data = src.read()
         size = len(data)
-
-        import io
-        storage_key = f"objects/{object_id}"
-        self.client.put_object(
-            self.bucket,
-            storage_key,
-            io.BytesIO(data),
-            length=size,
-        )
+        storage_key = f"{self._prefix}objects/{object_id}"
+        self.client.put_object(self.bucket, storage_key, io.BytesIO(data), length=size)
         return storage_key, size
 
     def delete(self, storage_key: str) -> None:
@@ -65,22 +61,16 @@ class MinIOStorage(StorageBackend):
 
     def get_path(self, storage_key: str) -> str:
         from datetime import timedelta
-        return self.client.presigned_get_object(
-            self.bucket,
-            storage_key,
-            expires=timedelta(hours=1),
-        )
+        return self.client.presigned_get_object(self.bucket, storage_key, expires=timedelta(hours=1))
 
     def save_thumb(self, obj_id: int, data: bytes) -> None:
         import io
-        self.client.put_object(
-            self.bucket, f"thumbs/{obj_id}.jpg",
-            io.BytesIO(data), length=len(data), content_type="image/jpeg",
-        )
+        key = f"{self._prefix}thumbs/{obj_id}.jpg"
+        self.client.put_object(self.bucket, key, io.BytesIO(data), length=len(data), content_type="image/jpeg")
 
     def thumb_exists(self, obj_id: int) -> bool:
         try:
-            self.client.stat_object(self.bucket, f"thumbs/{obj_id}.jpg")
+            self.client.stat_object(self.bucket, f"{self._prefix}thumbs/{obj_id}.jpg")
             return True
         except Exception:
             return False
@@ -88,5 +78,5 @@ class MinIOStorage(StorageBackend):
     def get_thumb_path(self, obj_id: int) -> str:
         from datetime import timedelta
         return self.client.presigned_get_object(
-            self.bucket, f"thumbs/{obj_id}.jpg", expires=timedelta(hours=1),
+            self.bucket, f"{self._prefix}thumbs/{obj_id}.jpg", expires=timedelta(hours=1),
         )

@@ -12,8 +12,12 @@ CHUNK_SIZE = 1024 * 1024  # 1MB
 
 class LocalStorage(StorageBackend):
 
-    def __init__(self, data_dir: str | None = None):
-        self.data_dir = Path(data_dir or os.getenv("ATLAS_DATA_DIR", "data"))
+    def __init__(self, data_dir: str | None = None, tenant_slug: str | None = None):
+        base = Path(data_dir or os.getenv("ATLAS_DATA_DIR", "data"))
+        # In multi-tenant mode, namespace each tenant under its own subdirectory:
+        #   data/family/   data/business/
+        # Single-tenant (slug=None) keeps the flat layout: data/
+        self.data_dir = base / tenant_slug if tenant_slug else base
 
     def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +69,5 @@ class LocalStorage(StorageBackend):
         return str(self._thumb_path(obj_id))
 
 
-# backward-compatible function สำหรับ code เดิมที่ยังใช้อยู่
 def save_file(object_id: int, src: BinaryIO) -> Tuple[str, int]:
     return LocalStorage().save(object_id, src)
