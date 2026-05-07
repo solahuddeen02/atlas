@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from core.auth.dependencies import CurrentUser, get_current_user
 from core.db.session import get_db
-from apps.drive.schemas import CreateFolderRequest
-from apps.objects.domain import create_folder, list_folder
+from plugins.drive.schemas import CreateFolderRequest
+from core.objects.domain import create_folder, list_folder
 
 router = APIRouter(tags=["drive"])
 

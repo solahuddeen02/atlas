@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from core.auth.dependencies import CurrentUser, get_current_user
 from core.db.session import get_db
-from apps.objects.domain import list_photos
+from core.objects.domain import list_photos
 
 router = APIRouter(tags=["photos"])
 

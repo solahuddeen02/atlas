@@ -10,15 +10,15 @@ from sqlalchemy.orm import Session
 from core.auth.dependencies import CurrentUser, get_current_user
 from core.db.session import get_db
 from core.storage.factory import get_storage
-from apps.objects.schemas import RenameRequest, ShareRequest
-from apps.objects.domain import (
+from plugins.objects.schemas import RenameRequest, ShareRequest
+from core.objects.domain import (
     attach_metadata, attach_storage, create_object, create_share_link,
     empty_trash, get_object, get_object_by_share_token, list_objects,
     list_share_links, list_trash, move_object, permanent_delete_object,
     rename_object, restore_object, revoke_share_link, set_status,
     trash_object_recursive,
 )
-from apps.objects.thumbnail import make_thumbnail
+from core.bus import bus
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 share_router = APIRouter(tags=["share"])
@@ -56,14 +56,14 @@ def upload_object(
         set_status(db, obj_id, "ready", commit=False)
         db.commit()
 
+        payload: dict = {"id": obj_id, "name": name, "mime_type": file.content_type, "storage_key": path}
         if file.content_type and file.content_type.startswith("image/"):
             try:
                 file.file.seek(0)
-                thumb = make_thumbnail(file.file)
-                if thumb:
-                    storage.save_thumb(obj_id, thumb)
+                payload["file_data"] = file.file.read()
             except Exception:
                 pass
+        bus.publish("object.uploaded", payload)
 
         return {"id": obj_id, "name": name, "size": size, "mime_type": file.content_type, "created_at": created_at, "status": "ready"}
 
