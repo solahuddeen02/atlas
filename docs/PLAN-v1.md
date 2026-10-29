@@ -1,58 +1,62 @@
 # Atlas v1: delivery plan
 
-**Goal:** the foundation from [VISION](VISION.md), built as designed in [ARCHITECTURE](ARCHITECTURE.md) and the ADRs.
+**Goal:** the foundation from [VISION](VISION.md), built as designed in [ARCHITECTURE](ARCHITECTURE.md) and the ADRs, and installable by any self-hoster following [SELF_HOSTING](SELF_HOSTING.md).
 
-**Ordering principle:** close the audit's exploitable issues first, then make the base safe (CI, secrets, DB, deploy), then build identity → authorization → registry → console → connectors.
+**Ordering principle:**
+1. Close the audit's exploitable issues on today's code.
+2. **Validate the identity decision (spike)** before any platform code depends on it.
+3. Make the base safe (CI, secrets, DB, deploy).
+4. Build identity → authorization → registry → console → connectors.
 
 **Rules for every phase:**
 - One PR or a small series of PRs. CI must be green and is required.
-- Each phase ships with its tests. A phase is done only when its acceptance criteria are met **and** its tests run in CI.
-- No phase may lower an earlier phase's guarantee. Earlier phases' tests stay in the suite.
-- Nothing in the repo names hostnames, IPs or homelab details beyond the deploy contract.
+- A phase is done only when its acceptance criteria are met **and** its tests run in CI.
+- Later phases never weaken earlier guarantees. Earlier tests stay.
+- No hostnames, IPs or anyone's site details in the repo. Use `example.com` placeholders only.
 
-| # | Phase | Main outcome | Security fixes closed (AUDIT ids) |
+| # | Phase | Main outcome | AUDIT ids closed |
 |---|---|---|---|
 | 0 | Emergency patches on legacy `main` | Today's code is no longer trivially exploitable; CI green | A1, O1–O3, O5, O7, I1, F1 |
-| 1 | Repo hygiene & CI baseline | Lockfiles, gitleaks, lint, required CI; legacy code isolated | I5, §3.5 hygiene |
-| 2 | Config & secrets | Fail-closed `Settings`; env-file-only secrets | A1 (structural), §3.5 |
-| 3 | Database & migrations | Postgres, kernel baseline, `atlas-migrate`, external volume, backups | §1.5, §2.2 |
-| 4 | Deploy skeleton | nginx on `127.0.0.1:8081`, `/health`, security headers, compose per contract | I2, I3 |
-| 5 | IdP spike (decision gate) | ADR-001 confirmed (Kanidm) or switched (Authentik) | — |
-| 6 | Identity & sessions | OIDC login, server-side sessions, revocation, CSRF, rate limits | A2–A8 |
-| 7 | Authorization core | Roles, permissions, route inventory, `get_for`, two-user tests | O1–O6 (by construction) |
-| 8 | Module registry | Manifests, enable/disable, nav, per-module migrations | — |
-| 9 | Admin console | Users, roles, modules, sessions, audit, step-up | — |
-| 10 | Connectors, Immich, events | Connector framework, Immich SSO + health, outbox, Hermes hook | — |
-| 11 | Hardening & release | Cloudflare edge rules and Access on admin paths, restore drill, runbooks, v1.0.0 | — |
+| **S** | **Identity spike** (decision gate for ADR-001) | Kanidm validated behind a reverse proxy: Immich web + mobile, TOTP, step-up, admin API. Results in ADR-001 | — |
+| 1 | Repo hygiene & CI baseline | Lockfiles, gitleaks, lint, required CI; legacy isolated | I5, §3.5 hygiene |
+| 2 | Config & secrets | Fail-closed `Settings`; `atlas-init` secret generation; env files only | A1 (structural), §3.5 |
+| 3 | Database & migrations | Postgres, kernel baseline, `atlas-migrate`, external volumes, backup/restore | §1.5, §2.2 |
+| 4 | Deploy skeleton | `atlas-proxy` on a configurable bind/port, `/health`, headers, bundled IdP wired, one-command install | I2, I3 |
+| 5 | Identity & sessions | OIDC RP (bundled + BYO), sessions, revocation, CSRF, rate limits, break-glass | A2–A8 |
+| 6 | Authorization core | Roles, permissions, route inventory, `get_for`, two-user tests | O1–O6 (by construction) |
+| 7 | Module registry | Manifests, enable/disable, nav, per-module migrations | — |
+| 8 | Admin console | Users, roles, modules, sessions, audit, step-up | — |
+| 9 | Connectors, Immich, events | Connector framework, Immich SSO + health, outbox, Hermes hook | — |
+| 10 | Hardening, docs & release | Exposure guides (Cloudflare Tunnel + Access recommended), restore drill, SELF_HOSTING verified on a clean host, v1.0.0 | — |
 
 ---
 
-## Phase 0: Emergency patches on legacy `main`
+## Phase 0: Emergency patches on legacy `main` (owner-approved)
 
-**Why first:** the repo is public, and the audit shows token forgery and cross-user writes on current code. These patches are deliberately **minimal**. This is the one exception to "Drive/Photos code stays as-is": only security patches, no refactors.
+**Why first:** the repo is public, and the audit shows token forgery and cross-user writes on current code. This is the single approved exception to "Drive/Photos code stays as-is". The patches are **minimal and security-only**.
 
 **Work:**
 1. `SECRET_KEY`: remove the default. Refuse to start if it's unset, shorter than 43 chars, or on the placeholder denylist.
-2. Remove the literal `SECRET_KEY` and MinIO credentials from `docker-compose.yml`. Use `env_file: /srv/appdata/secrets/app.env` and add `deploy/app.env.example` (names only).
-3. Ownership check on referenced ids:
+2. Remove the literal secrets from `docker-compose.yml`. Read them from an untracked env file instead, and commit an `.env.example` (names only).
+3. Ownership checks on referenced ids:
    - `parent_id` on `POST /folders` and on upload;
-   - `new_parent_id` on move, which must also be the caller's own **folder** and must not create a cycle;
+   - `new_parent_id` on move, which must be the caller's own **folder** and must not create a cycle;
    - all of them return 404 for not-yours.
 4. `_get_owned_object` returns 404 (not 403) for other users' objects.
 5. `DELETE /objects/{id}/permanent` only accepts trashed objects.
 6. Drop the `storage` field from `/objects` and `/photos` responses.
-7. Upload size cap (config, default 100 MB) enforced while streaming.
-8. Fix the tests: add `auth_headers` and `two_users` fixtures, use JSON bodies, and stop leaking into `./atlas.db` (set `DATABASE_URL` in conftest and drop the lifespan `init_db` in tests). Fix the recovery test's missing `owner_id`.
+7. Upload size cap (configurable, default 100 MB) enforced while streaming.
+8. Fix the tests: `auth_headers` and `two_users` fixtures, JSON bodies, no leaking into `./atlas.db`, the recovery test's `owner_id`.
 
 **Acceptance criteria:**
 - The app exits non-zero with no `SECRET_KEY` and with each denylisted value.
 - A token forged with the old default is rejected.
-- User B gets 404 for every attempt in AUDIT O1–O3.
-- Moving a folder into itself or a descendant gives 400 or 404.
+- User B gets 404 for every AUDIT O1–O3 attempt.
+- A move into self or a descendant gives 400/404.
 - Permanent delete of a live object gives 409/404.
-- No API response contains a filesystem path.
+- No response contains a filesystem path.
 - An upload over the cap gives 413 and leaves no file and no `ready` row.
-- `pytest` is fully green on CI (Python 3.11). Running `pytest` leaves no `atlas.db` in the repo.
+- `pytest` is green in CI. A run leaves no `atlas.db` in the repo.
 
 **Tests:**
 - `test_secret_key_fail_closed`
@@ -64,15 +68,47 @@
 - `test_upload_size_limit`
 - The existing suite, updated with auth.
 
+## Spike S: identity validation (before Phase 1)
+
+**Why here:** ADR-001 makes Kanidm the bundled IdP *provisionally*. Phases 2–5 (secrets layout, `atlas-init` bootstrap, proxy vhosts and internal TLS, the RP and the `IdentityAdmin` adapter) all depend on it. Validating it before Phase 1 means no platform code gets built on an unverified choice.
+
+**Setup:**
+- A throwaway compose stack on any test host: Kanidm + nginx (configured the way `atlas-proxy` will be) + Immich + a minimal authlib test client.
+- Public TLS in front through any exposure option. The Cloudflare Tunnel is recommended because it matches the documented default.
+- Two test hostnames on a domain the tester controls. They are **not recorded in the repo**.
+
+**Checklist:** exactly the table in [ADR-001 → Spike results](adr/001-identity.md#spike-results). Must-pass items:
+1. Kanidm behind the reverse proxy: public origin, internal TLS re-encryption, real client IP, lockout.
+2. Per-group credential policy: admin requires passkey/MFA; child allows password.
+3. No-mail enrolment through a reset token: password + **TOTP**, and passkey.
+4. **TOTP** login and lockout.
+5. RP login with PKCE + ES256, ID-token validation, logout.
+6. **Step-up:** `prompt=login`/`max_age=0` forces re-auth, and `auth_time` is fresh.
+7. **Immich web** SSO, group-restricted.
+8. **Immich mobile** SSO from outside the LAN through the proxy.
+9. **Admin API:** create/disable person, groups, reset token.
+10. *(should)* List and revoke a person's sessions.
+11. Kanidm backup and restore.
+12. Idempotent bootstrap script: no overwrite of the CA/cert.
+
+**Acceptance criteria:**
+- ADR-001's "Spike results" table is fully filled in: versions, pass/fail and evidence (commands and redacted screenshots, with no hostnames or secrets).
+- The outcome is recorded: (a) confirmed, (b) confirmed with workarounds, or (c) superseded (Authentik bundled, via a new ADR).
+- If (c), Phases 2–5 are re-scoped before Phase 1 starts.
+
+**Artifacts:**
+- `deploy/spike/` holds the stack definition, bootstrap commands and test client, with placeholders only.
+- The ID-token validation cases become fixtures for Phase 5.
+
 ## Phase 1: Repo hygiene & CI baseline
 
 **Work:**
-- `git mv core frontend tests alembic → legacy/…`. Path moves only, plus updated imports and CI paths. The legacy suite keeps running.
-- Create empty `atlas/`, `modules/`, `web/` and `deploy/` packages per ARCHITECTURE §2.
-- Python with `uv` and a lockfile (`uv.lock`). Node lockfile already exists (`npm ci`).
+- `git mv core frontend tests alembic → legacy/…` (paths only). The legacy suite keeps running.
+- Create `atlas/`, `modules/`, `web/` and `deploy/` per ARCHITECTURE §2.
+- Python with `uv` and a lockfile. Node `npm ci`.
 - `ruff` (lint + format) and `mypy --strict` on `atlas/`. Banned-api rule: `os.getenv` outside `atlas/kernel/config.py`.
-- `import-linter` contracts (ARCHITECTURE §2), initially vacuous.
-- `.gitignore` / `.dockerignore` updated per ADR-004 §4.
+- `import-linter` contracts.
+- `.gitignore` / `.dockerignore` per ADR-004 §5.
 - CI jobs:
   - backend tests;
   - legacy tests;
@@ -81,266 +117,245 @@
   - `pip-audit`, `npm audit --omit=dev`;
   - compose-secret linter;
   - Renovate/Dependabot.
-- Branch protection on `main`: CI is required.
+- Branch protection: CI required.
 
 **Acceptance criteria:**
-- Every CI job is green and required.
-- gitleaks finds nothing on the full history.
-- A PR that adds `SECRET_KEY=abc` to compose fails CI.
-- A PR that adds `os.getenv` in `atlas/` fails CI.
+- Every job is green and required.
+- gitleaks is clean on the full history.
+- A PR adding a literal secret to compose fails.
+- A PR adding `os.getenv` in `atlas/` fails.
 
-**Tests:**
-- A CI self-test fixture: a deliberately bad file in a scratch branch is caught by the secret linter. This is documented, not kept in `main`.
+**Tests:** linter self-checks, documented in CONTRIBUTING.
 
 ## Phase 2: Config & secrets (ADR-004)
 
 **Work:**
-- `atlas/kernel/config.py` `Settings` model with `SecretStr` fields.
-- Fail-closed validators: length, variety, denylist; production is the default.
-- `create_app(settings)` factory. A test-settings builder.
-- `deploy/app.env.example` (names and generation commands only). `make dev-secrets` generates an untracked `.env.dev`.
-- Postgres superuser password lives in its own env file. Compose has no `environment:` secrets and no hostnames (hostnames go in the untracked `site.env`).
+- `Settings` with `SecretStr`. Loading from `ATLAS_ENV_FILES`, with real env vars overriding.
+- Fail-closed validators, including rejection of `example.com` URLs in production.
+- `create_app(settings)` and a test-settings builder.
+- `atlas-admin init` (the `atlas-init` service). It generates missing secrets with an RNG into `${ATLAS_SECRETS_DIR}`, using the per-consumer subdirectories, `0700`/`0600` modes, never overwriting, and idempotent.
+- `.env.example` with generic defaults (bind `127.0.0.1`, port `8080`, `TZ=UTC`, `./secrets`, `./backups`, `example.com` placeholders).
 
 **Acceptance criteria:**
 - Every ADR-004 check fails closed with a message that names the variable but not its value.
-- `ATLAS_ENV` unset means production rules apply.
-- `docker compose config` renders using only the example files.
+- `ATLAS_ENV` unset means production rules.
+- `atlas-init` on an empty dir creates every file with the correct modes. A second run changes nothing. Pre-existing operator files are untouched.
+- `docker compose config` renders from `.env.example`.
 
 **Tests:**
-- `tests/kernel/test_settings.py` covers:
-  - missing, short, low-variety and denylisted key;
-  - value not in the error message;
-  - production default;
-  - production-only rules;
-  - `misconfigured` state for a connector with a missing `secret_ref`.
-- A container test: a placeholder key means exit ≠ 0.
+- `tests/kernel/test_settings.py`: missing, short, low-variety and denylisted key; value not in the error; production default; `example.com` rejected; env-over-file precedence; connector `misconfigured`.
+- `tests/cli/test_init.py`: generation, modes, idempotence, no-overwrite.
+- Container test: a placeholder key means exit ≠ 0.
 
 ## Phase 3: Database & migrations (ADR-005)
 
 **Work:**
-- Postgres 17 service pinned by digest, healthcheck, **`atlas_pgdata` external volume**, and an init script creating `atlas_migrator` and `atlas_app`.
-- `atlas/kernel/db`: SQLAlchemy 2 engine from `Settings`, unit-of-work, UTC session timezone.
-- Alembic env reads from `Settings`; `sqlalchemy.url` removed from the ini. Per-module version locations and branch labels.
-- `0001_kernel_baseline` creates: `users`, `permissions`, `role_permissions`, `user_permission_overrides`, `sessions`, `audit_log` (append-only grants), `modules`, `connectors`, `outbox`, `rate_limits`, `settings`.
-- `atlas-admin migrate` (advisory lock → `pg_dump` if anything is pending → `upgrade heads` → seed) and the `atlas-migrate` one-shot compose service. The API `depends_on` it completing successfully.
-- Nightly backup script and retention, plus a `restore` runbook. Compose comment and README warning: never `docker compose down -v`.
-- Test infra: Postgres service in CI and `compose.test.yml` locally.
+- Postgres 17 pinned by digest, `POSTGRES_PASSWORD_FILE`, external volume `${ATLAS_PGDATA_VOLUME}`.
+- `atlas-init` creates the `atlas_migrator` and `atlas_app` roles.
+- `atlas/kernel/db` (engine from `Settings`, unit-of-work, UTC session timezone).
+- Alembic env from `Settings`. Per-module branches.
+- `0001_kernel_baseline`: `users`, `account_links`, `permissions`, `role_permissions`, `user_permission_overrides`, `sessions`, `audit_log` (append-only grants), `modules`, `connectors`, `outbox`, `rate_limits`, `settings`.
+- `atlas-migrate`: advisory lock, pre-migration dump into `${ATLAS_BACKUP_DIR}`, `upgrade heads`, seed.
+- `atlas-backup` / `atlas-admin restore` with retention settings.
+- Warning comment in compose: never `down -v`.
 
 **Acceptance criteria:**
-- `atlas-migrate` on an empty DB → API starts.
-- An injected failing migration → API doesn't start and the old containers keep running.
-- `atlas_app` can't run DDL.
-- `docker compose down -v && docker compose up -d` keeps all data (CI, throwaway volume).
-- A missing external volume makes `up` fail loudly.
-- Restore from a dump into a scratch DB passes the smoke test.
+- Empty DB → migrate → API starts.
+- An injected failing migration → API doesn't start.
+- `atlas_app` can't run DDL or alter `audit_log`.
+- `down -v && up -d` keeps all data (CI, throwaway volumes).
+- A missing external volume makes `up` fail loudly with a helpful message.
+- Backup → restore into a scratch stack passes the smoke tests.
 
 **Tests:**
 - `test_migrations_upgrade_empty`
-- `test_alembic_check_models_match`
-- `test_schema_lint` (`timestamptz`, FK + index on `*_id`)
+- `test_alembic_check`
+- `test_schema_lint`
 - `test_app_role_no_ddl`
 - `test_audit_log_append_only`
-- Compose integration: `test_down_v_preserves_data`, `test_failed_migration_blocks_api`
+- Compose: `test_down_v_preserves_data`, `test_failed_migration_blocks_api`, `test_backup_restore_roundtrip`.
 
-## Phase 4: Deploy skeleton (contract)
+## Phase 4: Deploy skeleton (one-command install)
 
 **Work:**
-- nginx container with the port published as **`127.0.0.1:8081:8080`** only. Host-based vhosts from `site.env`, unknown `Host` → 444, real IP from `CF-Connecting-IP` trusted only from loopback.
-- Security headers (ADR-003) and `limit_req` zones.
-- nginx serves the static SPA build and proxies `/api/` and `/health` to `atlas-api`, which has no published port.
-- `GET /health` → exactly `{"status":"ok"}`. `/health/ready` is loopback-only.
-- `TZ=Asia/Bangkok` on every service.
-- Production disables `/docs`.
-- Multi-stage images with non-root users.
-- Runbook: first deploy (create volumes, env files, `up -d`), upgrade, rollback (previous image tag; migrations are forward-only, so restore from the pre-migration dump if needed).
+- `atlas-proxy` (nginx) publishes only `${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`.
+- Vhosts are generated from `ATLAS_PUBLIC_URL` and `ATLAS_IDP_PUBLIC_URL`. Unknown `Host` → 444.
+- Real IP from `ATLAS_REAL_IP_HEADER`, trusted only from `ATLAS_TRUSTED_PROXY_CIDRS`.
+- Security headers. `limit_req` zones. `client_max_body_size` from config.
+- SPA static. `/api` and `/health` proxied to `atlas-api`, which has no published port.
+- Bundled Kanidm under the `bundled-idp` profile (on by default) with an external volume. `atlas-init` generates the internal CA/cert, and the proxy re-encrypts and verifies it.
+- `/health` → exactly `{"status":"ok"}`. `/health/ready` for trusted peers only.
+- `TZ` (default `UTC`) on every service.
+- `/docs` off in production.
+- Multi-arch (amd64/arm64), multi-stage, non-root images.
 
 **Acceptance criteria:**
-- On a clean Debian VM following the runbook, `curl -s 127.0.0.1:8081/health` gives `{"status":"ok"}`.
-- `ss -ltn` shows no other new listening ports.
-- Headers present.
-- `/docs` → 404.
-- Containers run as non-root.
-- The image doesn't contain `.env`, `.git` or `tests`.
+- On a clean Linux host, the SELF_HOSTING quick start works: `cp .env.example .env`, edit the two URLs, create volumes, `docker compose up -d`. Then `curl -s http://127.0.0.1:8080/health` gives `{"status":"ok"}`.
+- Only `atlas-proxy` publishes a port. Changing the bind/port settings moves it.
+- Headers are present. `/docs` gives 404. The images contain no `.env`, `.git` or `tests` and run as non-root.
+- BYO mode (profile off) starts without the `idp` service.
 
 **Tests:**
-- Compose smoke test in CI: `health_ok`, `only_loopback_8081_published` (inspect the compose config), `unknown_host_dropped`, `security_headers_present`, `docs_disabled_in_production`.
-- `nginx -t`.
-- Image content test.
+- Compose smoke tests in CI (default + BYO): `health_ok`, `single_published_port`, `bind_and_port_configurable`, `unknown_host_dropped`, `real_ip_untrusted_ignored`, `security_headers_present`, `docs_disabled_in_production`.
+- `nginx -t`. Image content test.
 
-## Phase 5: IdP spike, the decision gate for ADR-001
-
-**Work:** run Kanidm in the compose stack on a non-production VM, behind nginx with internal TLS. Work through this checklist:
-1. Create persons in each role group, with credential policy per role (admin → passkey/MFA; child → password allowed).
-2. Admin-issued credential reset token → enrolment of a password + TOTP and a passkey. No mail involved.
-3. Atlas test client (authlib) with PKCE + ES256: login, ID-token validation, `auth_time` present, `max_age=0`/`prompt=login` forces re-auth, end-session works.
-4. **Immich web and mobile SSO** against Kanidm: ES256 + `client_secret_post` web login, then the mobile app via Immich's mobile redirect override. Group-restricted access.
-5. Admin API through a service account: create, disable and enable a person; set group membership; issue a reset token; list sessions and (if supported) revoke them.
-6. Backup and restore of the IdP volume.
-7. Resource usage on the VM.
-
-**Acceptance criteria:**
-- A written result appended to ADR-001 (status → Accepted, or Superseded by Authentik), with every checklist item marked pass/fail and its evidence.
-- If any of items 3, 4 or 5 fails and has no workaround, repeat the spike with Authentik.
-
-**Tests:** spike scripts kept under `deploy/spike/` (no secrets, no hostnames). The ID-token validation cases become fixtures for Phase 6.
-
-## Phase 6: Identity & sessions (ADR-001, ADR-003)
+## Phase 5: Identity & sessions (ADR-001, ADR-003)
 
 **Work:**
-- `atlas/kernel/identity`:
-  - OIDC RP: login, callback, logout, step-up;
-  - JWKS cache with rotation;
-  - strict validation of `iss`, `aud`, `exp`, `nonce`, `auth_time`;
-  - unknown `sub` → reject (no JIT sign-up).
-- Sessions table, a `__Host-` cookie and CSRF synchronizer token. Rotation on login, step-up and role change.
-- Idle and absolute lifetimes per role.
-- `IdentityAdmin` interface with a Kanidm (or Authentik) implementation and a fake.
-- Rate limits (app layer) on auth endpoints.
-- `atlas-admin bootstrap-owner`: one-time, host-only. It creates the first owner and issues their IdP enrolment token.
-- `atlas-admin break-glass`: one-time 10-minute owner login URL, audited.
-- The legacy HS256 JWT, local passwords and `/auth/register` are not carried into `atlas/`.
+- OIDC RP using the spike's validated parameters:
+  - login, callback, logout, step-up;
+  - JWKS cache;
+  - strict `iss`/`aud`/`exp`/`nonce`/`auth_time`;
+  - internal back-channel URL + CA for the bundled IdP.
+- Unknown `(issuer, sub)` → reject unless completing an **account link** (BYO).
+- Sessions with a `__Host-` cookie, CSRF synchronizer token, rotation, per-role lifetimes (configurable).
+- `IdentityAdmin` implementations: `kanidm`, `manual` (BYO) and `fake`.
+- `atlas-init` IdP bootstrap (bundled): Atlas OAuth2 client, console service account, role groups and credential policies.
+- `atlas-admin bootstrap-owner`: creates the first owner and prints a one-time enrolment link. In BYO mode it prints a link code.
+- `atlas-admin break-glass`.
+- App-layer rate limits.
+- Legacy JWT, passwords and `/auth/register` are not carried forward.
 
 **Acceptance criteria:**
-- Login works end to end against the real IdP (compose integration test) and against a fake issuer (unit tests).
-- Tampered, expired, wrong-`aud` or replayed (nonce) tokens are rejected.
-- Revoke → the next request gives 401.
-- Disable user → all of their sessions are gone at once.
-- Cookie flags correct. No token appears in `localStorage` or in any response body.
-- CSRF is enforced on unsafe methods.
-- The N+1-th auth callback per window gives 429.
+- Login works against the bundled IdP (compose integration) and the fake issuer (unit tests).
+- BYO linking binds exactly one `(issuer, sub)` per code, and an expired or reused code is rejected.
+- Tampered, expired, wrong-`aud` and replayed tokens are rejected.
+- Revoke → next request 401. Disable user → all sessions gone.
+- Cookie flags correct. No token in `localStorage` or any response body.
+- CSRF enforced. N+1-th auth callback → 429.
 - Break-glass works once, expires, and is audited.
 
-**Tests:**
-- `tests/kernel/identity/` covers validation cases (from the spike fixtures), session lifecycle, rotation, CSRF, rate limit, bootstrap-owner, break-glass, and idle/absolute expiry (with frozen time).
-- An integration test with the real IdP container.
+**Tests:** `tests/kernel/identity/` covers validation fixtures from the spike, session lifecycle, rotation, CSRF, rate limits, linking, bootstrap-owner, break-glass, and idle/absolute expiry (frozen time). Plus an integration test against the bundled IdP.
 
-## Phase 7: Authorization core (ADR-002)
+## Phase 6: Authorization core (ADR-002)
 
 **Work:**
-- `Principal`; the permission registry; role → permission seeding; user overrides; ceilings and invariants (at least one owner, admin limits, child/guest ceilings, guest expiry).
-- `sdk.router(module)`, which requires `permission=` or `public=True`. A startup route-inventory check refuses to boot on any undeclared route.
-- Scoped repository base with `get_for`/`list_for`. Not-yours = 404.
-- Step-up flag enforcement → `401 step_up_required`.
-- Audit writer (same transaction).
-- `import-linter` contracts become active.
+- `Principal`. The permission registry and seeding. User overrides.
+- Ceilings and invariants: last owner, admin limits, child/guest ceilings, guest expiry.
+- `sdk.router(module)` requiring `permission=` or `public=True`, plus a startup route-inventory check.
+- Scoped repositories with `get_for`/`list_for`. Not-yours = 404.
+- Step-up enforcement (`ATLAS_STEP_UP_MAX_AGE`).
+- Same-transaction audit writer.
+- `import-linter` contracts active.
 
 **Acceptance criteria:**
-- Booting with an undeclared route fails.
-- The two-user matrix test generates cases for every id-taking route and all of them pass, including the **named regressions for AUDIT O1–O3** (re-expressed against the `hello` module's parent/child resource).
-- Every invariant holds under direct API attempts.
-- A stale `auth_time` on a step-up permission gives 401.
+- An undeclared route stops boot.
+- The generated two-user matrix passes for every id-taking route, including **named AUDIT O1–O3 regressions** on the `hello` module's parent/child resource.
+- The invariants hold under direct API attempts.
+- A stale `auth_time` gives `401 step_up_required`.
 
 **Tests:**
 - `test_route_inventory`
-- `test_two_user_matrix` (generated)
+- `test_two_user_matrix`
 - `test_role_matrix`
-- `test_invariants_last_owner|admin_limits|ceilings|guest_expiry`
+- `test_invariants_*`
 - `test_step_up`
 - `test_audit_same_txn`
-- import-linter in CI.
+- import-linter.
 
-## Phase 8: Module registry
+## Phase 7: Module registry
 
 **Work:**
 - `ModuleManifest` and validation. Discovery from a configured list.
-- Mount under `/api/v1/m/<id>` with the enabled + `<id>.access` guard (otherwise 404).
-- `GET /api/v1/nav` filtered per principal.
-- `requires` and cycle checks. `misconfigured` state.
-- Per-module Alembic branches run by `atlas-migrate`.
-- Module events registration.
-- `modules/hello` reference module: one owned resource with parent/child, permissions, nav, a migration and an event handler.
-- SPA shell in `web/`: router, typed API client (401 → re-login, `step_up_required` → re-auth), nav from the API, lazy module chunks.
+- Guarded mounting under `/api/v1/m/<id>`.
+- `GET /api/v1/nav`.
+- `requires` and cycles. `misconfigured` state.
+- Per-module Alembic branches. Event registration.
+- `modules/hello` reference module.
+- SPA shell: router, typed API client (401 → re-login, `step_up_required` → re-auth), nav from the API, lazy chunks.
 
 **Acceptance criteria:**
-- Enable or disable `hello` → its routes return 200/404 and its nav entry appears/disappears without a restart.
-- An invalid manifest stops boot with a clear error.
-- Disabling a module that others require is refused.
-- `hello`'s migration runs even while it's disabled.
-- The SPA never requests a disabled module's chunk.
+- Enabling or disabling `hello` toggles its routes (200/404) and its nav entry without a restart.
+- An invalid manifest stops boot clearly.
+- Disabling a required module is refused.
+- Migrations run while the module is disabled.
+- No chunk is requested for a disabled module.
 
-**Tests:**
-- `tests/kernel/registry/` covers manifest validation, guard, nav filtering, `requires`, `misconfigured`, migrations per branch.
-- Web: Vitest + Testing Library for nav rendering and the API client's 401/step-up handling.
+**Tests:** `tests/kernel/registry/`. Web: Vitest + Testing Library for nav and the API client.
 
-## Phase 9: Admin console
+## Phase 8: Admin console
 
-**Work:** console pages and their APIs (all `admin.*` permissions, with step-up on mutations):
+**Work:** console pages and their APIs (`admin.*`, step-up on mutations):
 - **Users:**
-  - create (in Atlas + IdP through `IdentityAdmin`, atomically: if the IdP call fails, the Atlas user isn't created);
-  - set role;
+  - create (atomic across Atlas + `IdentityAdmin`);
+  - role;
   - disable/enable;
   - guest expiry;
-  - **reset credentials** (issues an IdP reset token and shows it once as a link and QR code for in-person hand-over);
-  - "Immich access" toggle (IdP group).
-- **Roles & permissions:** role × permission matrix editor (ceilings shown greyed out) and per-user overrides.
-- **Modules:** list, state, enable/disable, `misconfigured` reasons.
+  - **reset credentials** (bundled: IdP reset token shown once as a link and QR code; BYO: guidance plus a new link code if needed);
+  - "Immich access" toggle.
+- **Roles & permissions:** matrix (ceilings greyed out) and per-user overrides.
+- **Modules:** state, enable/disable, `misconfigured` reasons.
 - **Sessions:** per user, revoke one or all. Users also get "my sessions".
 - **Audit log:** filterable, read-only.
 
 **Acceptance criteria:**
-- An admin can do every VISION "done" action (create a child, reset a credential, revoke sessions, disable a module) from the console.
-- Every one of them produces exactly one audit entry.
+- Every VISION "done" admin action works from the console and writes exactly one audit entry.
 - An admin can't modify an owner or exceed their own permissions.
-- No secret is ever displayed. Reset tokens are shown once and never stored in Atlas.
-- Mutations after 5 minutes without step-up prompt a re-auth.
+- Secrets are never displayed. Reset tokens are shown once and never stored.
+- A stale step-up prompts a re-auth.
 
 **Tests:**
-- API tests for every console action, covering the permission and step-up paths and audit rows.
-- IdP failure injection (the fake raises) leaves no partial state.
-- Playwright end to end against the compose stack: create child → reset → login as child → admin disables child → child's session dies.
+- API tests per action (permissions, step-up, audit).
+- `IdentityAdmin` failure injection leaves no partial state.
+- Playwright end to end on the compose stack: create child → reset → child logs in → admin disables → child's session dies.
 
-## Phase 10: Connectors, Immich, events, Hermes hook
+## Phase 9: Connectors, Immich, events, Hermes hook
 
 **Work:**
-- Kernel connector framework: types from manifests, instances in the DB, `secret_ref` status, scheduled health checks with timeouts, host allow-listed client.
-- `modules/immich`: connector type (`health`, `sso_link`), nav item, `immich.access` permission mapped to the IdP group.
-- Outbox and dispatcher (`SKIP LOCKED`, retries, dead-letter list in the console). Kernel events per ARCHITECTURE §5.
-- Hermes hook: the `api_tokens` table design and its disabled middleware stub, plus the event allow-list design. **No agent features.**
+- Connector framework: types from manifests, instances in the DB, `secret_ref` status from `connectors.env`, scheduled health checks, host allow-listed client.
+- `modules/immich`: health, nav link, `immich.access` mapped to the IdP group (bundled) or nav-only (BYO).
+- Outbox and dispatcher, with a dead-letter view. Kernel events.
+- Hermes hook: `api_tokens` design and a disabled middleware stub. **No agent features.**
 
 **Acceptance criteria:**
-- An admin adds the Immich connector. Status shows healthy, or a clear reason (`secret missing`, `unreachable`, `TLS error`).
-- A family member with `immich.access` sees the nav item and lands in Immich already signed in through SSO. Without it, there's no nav item and the IdP blocks Immich login.
-- Events are delivered at least once; a crashed handler is retried and eventually dead-lettered.
-- An event emitted in a rolled-back transaction is never delivered.
+- Adding the Immich connector shows healthy, or a clear reason.
+- A member with `immich.access` sees the link and lands in Immich signed in via SSO. Without it, there's no link, and with the bundled IdP the IdP blocks Immich login.
+- Events are delivered at least once, with retries and dead-lettering. A rolled-back event is never delivered.
 
 **Tests:**
-- Connector config validation and the missing secret ref case.
-- Health with a fake server (timeouts, non-200).
-- Allow-list blocks other hosts.
-- Outbox transactional semantics, retry/dead-letter and idempotent handler.
-- Integration: Immich SSO smoke test (web) in the compose test stack, where feasible. Otherwise a documented manual check in the release checklist.
+- Connector validation and missing secret ref.
+- Health against a fake server.
+- Allow-list.
+- Outbox semantics.
+- Immich web SSO smoke test in the compose test stack (mobile goes on the release checklist).
 
-## Phase 11: Hardening & release
+## Phase 10: Hardening, docs & release
 
 **Work:**
-- Cloudflare edge: rate-limit rules on the IdP and Atlas auth paths, plus managed WAF rules.
-- **Cloudflare Access on `/admin*` and `/api/v1/admin/*` only** (ADR-003). The IdP's admin surface is either not routed or sits behind Access.
+- **Exposure guides** in SELF_HOSTING:
+  - Cloudflare Tunnel (recommended), with Access on `/admin*` and `/api/v1/admin/*`;
+  - your own reverse proxy (Caddy and Traefik examples);
+  - VPN-only.
 - A threat-model review against ADRs 001–005.
 - A dependency audit at zero high/critical.
 - Restore drill.
-- Runbooks: first deploy, upgrade, rollback, backup/restore, secret rotation, onboarding a family member, lost device, break-glass.
-- README rewritten from the new config table.
-- Tag `v1.0.0`.
+- SELF_HOSTING verified end to end on a clean host by someone other than the author, if possible.
+- README rewritten (quick start, links to SELF_HOSTING).
+- CONTRIBUTING and SECURITY.md (vulnerability reporting).
+- Tag `v1.0.0` with multi-arch images.
 
 **Acceptance criteria:**
 - Pen-test checklist passes:
   - forged and stale tokens;
   - CSRF;
-  - two-user matrix against production config;
+  - two-user matrix on production settings;
   - rate limits;
   - headers;
   - `/docs` off;
-  - only `127.0.0.1:8081` bound;
+  - single published port with loopback default;
   - `down -v` safe;
-  - the admin path asks for Access from outside, while the family app and Immich mobile still work without it.
-- Restore drill completed and recorded.
-- Every VISION "done" statement demonstrated on the real deployment.
+  - with the tunnel option, `/admin` asks for Access while the household app and Immich mobile still work without it.
+- Restore drill recorded.
+- Every VISION "done" statement demonstrated on a fresh install.
 
-**Tests:** the full suite plus the release checklist (`docs/runbooks/release-checklist.md`), executed and recorded on the release PR.
+**Tests:** full suite plus `docs/runbooks/release-checklist.md`, executed and recorded on the release PR.
 
 ---
 
 ## After v1 (pointers, not commitments)
 
-- **v2:** `files` → `drive` → `photos` modules ported from `legacy/` per ARCHITECTURE §8. Sharing on kernel `shares`, with an RLS backstop. Decide what Photos means given Immich. Import legacy data.
-- **v3+:** `lift` module. The Nextcloud replacement roadmap. Hermes, decided under its own ADR using the §9 hooks.
+- **v2:**
+  - `files` → `drive` ported from `legacy/` (ARCHITECTURE §8), with sharing on kernel `shares` and an RLS backstop;
+  - **decide Photos** (leaning: Immich connector link + SSO, no Atlas gallery);
+  - legacy data import.
+- **v3+:** the `lift` module, the Nextcloud-replacement roadmap, and Hermes under its own ADR.

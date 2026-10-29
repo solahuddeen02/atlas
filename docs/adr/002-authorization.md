@@ -1,7 +1,7 @@
 # ADR-002: Authorization: roles + per-module permissions + object ownership/sharing, enforced in one layer
 
 - **Status:** Proposed
-- **Date:** 2026-10-29
+- **Date:** 2026-10-29. Revised for generic self-hosting.
 - **Related:** [AUDIT](../AUDIT.md) §2.3 (coupling 2), §3.2 (O1–O7), [ADR-001](001-identity.md), [ARCHITECTURE](../ARCHITECTURE.md) §4
 
 ## Context
@@ -12,7 +12,7 @@ The audit's worst authorization bugs have one cause: **authorization was a helpe
 - Domain functions took `owner_id: int | None = None`, and `None` meant "no filter" (O6).
 - A missing object returned 404, while someone else's returned 403 (O5).
 
-v1 adds family roles, per-module access, an admin console and, later, sharing. The design must make this bug class **structurally impossible**, not just "fixed this time".
+v1 adds household roles, per-module access, an admin console and, later, sharing. The design must make this bug class **structurally impossible**, not just "fixed this time".
 
 ## Decision
 
@@ -20,7 +20,7 @@ v1 adds family roles, per-module access, an admin console and, later, sharing. T
 
 | Layer | Question | Stored in | Example |
 |---|---|---|---|
-| **Role (RBAC)** | What kind of family member is this? | `users.role` ∈ {`owner`,`admin`,`adult`,`child`,`guest`} | Child |
+| **Role (RBAC)** | What kind of household member is this? | `users.role` ∈ {`owner`,`admin`,`adult`,`child`,`guest`} | Child |
 | **Permission (per module)** | May this role/person use this capability? | `role_permissions` (role → permission), plus `user_permission_overrides` (allow/deny for one user) | `drive.files.write`, `admin.users.manage` |
 | **Object (ownership/sharing)**, from v2 | May this person act on *this* thing? | `owner_id` on module rows, plus a kernel `shares` table | Alice's "Holiday" folder is shared read-only with the `adult` role |
 
@@ -42,7 +42,7 @@ v1 adds family roles, per-module access, an admin console and, later, sharing. T
 - Shares grant `read` | `write` | `manage` to a user, a role, or (v2+) a link token with an expiry.
 - Folder shares are inherited by descendants.
 - A share can never grant more than the sharer holds.
-- Children's shares are limited to inside the family (no link shares).
+- Children's shares are limited to inside the household (no link shares).
 
 ### 2. Where the checks live, and why nothing can bypass them
 
@@ -79,7 +79,7 @@ PostgreSQL (FKs; optional RLS backstop, v2)
 - The session that modules receive is a unit-of-work bound to the principal.
 
 **Rule 6: Admin and step-up permissions are just permissions with a flag.**
-- Permissions marked `step_up: true` in a manifest (e.g. `admin.users.manage`, `admin.roles.manage`, `connectors.manage`) also require the session's last strong authentication to be under 5 minutes old ([ADR-001](001-identity.md), [ADR-003](003-internet-exposure.md)).
+- Permissions marked `step_up: true` in a manifest (e.g. `admin.users.manage`, `admin.roles.manage`, `connectors.manage`) also require the session's last strong authentication to be newer than `ATLAS_STEP_UP_MAX_AGE` (default 300 s) ([ADR-001](001-identity.md), [ADR-003](003-internet-exposure.md)).
 - If it's older, the API returns `401 step_up_required` and the UI re-runs the OIDC re-auth.
 
 **Rule 7: Decisions are audited.**

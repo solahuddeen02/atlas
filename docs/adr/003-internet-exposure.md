@@ -1,162 +1,188 @@
-# ADR-003: Internet exposure: Cloudflare Tunnel, 2FA, step-up, rate limiting, revocable sessions; Cloudflare Access only on admin surfaces
+# ADR-003: Internet exposure: one loopback entry point, operator-chosen exposure (Cloudflare Tunnel recommended), 2FA, step-up, rate limiting, revocable sessions
 
 - **Status:** Proposed
-- **Date:** 2026-10-29
-- **Related:** [AUDIT](../AUDIT.md) §3.1, §3.4, [ADR-001](001-identity.md), [ADR-002](002-authorization.md), [ADR-004](004-config-and-secrets.md)
+- **Date:** 2026-10-29. Revised for generic self-hosting.
+- **Related:** [AUDIT](../AUDIT.md) §3.1, §3.4, [ADR-001](001-identity.md), [ADR-002](002-authorization.md), [ADR-004](004-config-and-secrets.md), [SELF_HOSTING](../SELF_HOSTING.md)
 
 ## Context
 
-The family reaches Atlas, the IdP and Immich from outside the home.
+Household members reach Atlas, the IdP and Immich from outside the home. Atlas is self-hosted by people with very different networks: some behind CGNAT, some with an existing reverse proxy, and some who want VPN-only access.
 
-- The deploy contract fixes nginx on `127.0.0.1:8081` as the only listener.
-- There are no open inbound ports. A Cloudflare Tunnel connector on the host dials out and forwards public hostnames to that loopback port.
-- Users include children and older relatives on phones.
-- Immich's mobile app must keep working.
+Users include children and older relatives on phones, and Immich's mobile app must keep working.
 
-Today's app has no rate limiting, no revocation, tokens in `localStorage`, public `/docs` and no security headers (audit A3, A4, A6, I3).
+Today's app has:
+- no rate limiting (audit A6);
+- no revocation (A3);
+- tokens in `localStorage` (A4);
+- public `/docs` and no security headers (I3);
+- CORS hard-coded to a dev origin (I2).
 
 ## Decision
 
-### 1. Network path
+### 1. One entry point inside the stack; exposure is the operator's choice
+
+- The compose stack has exactly **one container that publishes a port**: the bundled reverse proxy, `atlas-proxy` (nginx).
+- It publishes `${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}` and speaks plain HTTP.
+- `atlas-api`, the bundled IdP and Postgres have **no published ports** and are reachable only on the internal compose network.
+- **The default bind is loopback.** Nothing is reachable from the network until the operator deliberately puts something in front.
+- Binding to all interfaces (`ATLAS_BIND_ADDRESS=0.0.0.0`) is allowed, but the docs warn about it. It only makes sense behind a firewall with your own TLS proxy, because browsers require HTTPS for Secure cookies and passkeys.
 
 ```
-Internet ──HTTPS──▶ Cloudflare edge (TLS, WAF/rate rules, optional Access on admin paths)
-                         │  outbound-only tunnel
-                         ▼
-              cloudflared (on the VM) ──▶ http://127.0.0.1:8081  nginx  (only listener)
-                                                   ├─ Host: <atlas-host> ─▶ atlas-web (static) + atlas-api
-                                                   └─ Host: <idp-host>   ─▶ idp (internal TLS)
-Immich: its own stack and hostname. Talks OIDC to <idp-host>; Atlas reaches it as a connector.
+                    ┌──────────── public TLS terminates here (operator's choice) ────────────┐
+Internet / LAN ──▶  │  Option 1: Cloudflare Tunnel connector  (recommended)                     │
+                    │  Option 2: your reverse proxy (Caddy / Traefik / nginx) with ACME TLS     │
+                    │  Option 3: VPN only (WireGuard / Tailscale-style) + TLS proxy on the VPN  │
+                    └───────────────────────────────┬───────────────────────────────────────────┘
+                                                    ▼  http://<bind>:<port>   (loopback by default)
+                                       atlas-proxy (nginx, only published port)
+                                          ├─ Host = ATLAS_PUBLIC_URL host     ─▶ SPA static + atlas-api
+                                          └─ Host = ATLAS_IDP_PUBLIC_URL host ─▶ idp (internal TLS, ADR-001)
+Immich: its own stack and hostname. Uses OIDC against the IdP's public URL. Atlas talks to it as a connector.
 ```
 
-**Ports:**
-- Only nginx publishes a port, and only on `127.0.0.1:8081`.
-- `atlas-api`, the IdP and Postgres have **no published ports**. They're reachable only on the internal compose network.
+### Exposure options
 
-**Client IP:**
-- Cloudflare sends `CF-Connecting-IP`.
-- nginx trusts it *only* from the loopback peer (`set_real_ip_from 127.0.0.1; real_ip_header CF-Connecting-IP;`) and forwards a single, overwritten `X-Real-IP` to the app.
-- The app trusts forwarded headers only from the nginx container.
+| Option | When to choose it | Notes |
+|---|---|---|
+| **1. Cloudflare Tunnel** (recommended) | No inbound ports, CGNAT, no static IP, want edge rate limiting/WAF | The connector runs wherever you like (host package or container) and forwards each public hostname to `http://<bind>:<port>`. Add Cloudflare Access on admin paths (§6). Example in [SELF_HOSTING](../SELF_HOSTING.md) |
+| **2. Your own reverse proxy with TLS** | You already run Caddy/Traefik/nginx with certificates | Proxy each hostname to `http://<bind>:<port>` and pass `Host` and the client address. Do edge rate limiting yourself |
+| **3. VPN only** | Family devices can all run a VPN client; you want zero public exposure | Still needs HTTPS hostnames with trusted certificates (e.g. DNS-01 ACME) for passkeys and Immich mobile |
+| **4. LAN only** | Testing | Not for real use without HTTPS. Secure cookies and passkeys won't work over plain HTTP, except on `localhost` |
+
+**Requirements on whatever sits in front** (documented in SELF_HOSTING):
+- Terminate valid public TLS for both hostnames (Atlas and IdP).
+- Forward the original `Host`.
+- Pass the client IP in a header.
+- Don't cache `/api/*`.
+
+**Client IP trust:**
+- The bundled proxy takes the client IP from `ATLAS_REAL_IP_HEADER`: `CF-Connecting-IP` for option 1, `X-Forwarded-For` (rightmost trusted hop) for options 2 and 3.
+- It trusts that header **only** from peers in `ATLAS_TRUSTED_PROXY_CIDRS` (default: loopback and the compose network gateway).
+- It forwards a single, overwritten `X-Real-IP` to the app.
+- The app trusts forwarded headers only from the bundled proxy.
 
 **Host allow-list:**
-- nginx serves only the configured hostnames. Any other `Host` gets a 444.
-- Hostnames come from config, never from the repo.
+- The proxy serves only the hostnames of `ATLAS_PUBLIC_URL` and `ATLAS_IDP_PUBLIC_URL`. Any other `Host` gets a 444.
+- Hostnames live in the operator's untracked `.env`, never in the repo.
 
 **Docs:**
-- `/docs`, `/redoc` and `/openapi.json` are disabled in production (`ATLAS_ENV=production`).
+- `/docs`, `/redoc` and `/openapi.json` are disabled when `ATLAS_ENV=production`, which is the default.
 
-### 2. Authentication strength by role (enforced in the IdP, checked by Atlas)
+### 2. Authentication strength by role
 
-| Role | Minimum credential (IdP account policy) | Session lifetime (idle / absolute) |
+The IdP's account policy enforces these minimums. With the bundled IdP, `atlas-init` configures them. With BYO, the operator does, and Atlas documents what's expected. Lifetimes are configurable; the defaults are:
+
+| Role | Minimum credential | Session idle / absolute (defaults) |
 |---|---|---|
-| owner, admin | Passkey, or password + TOTP | 12 h / 7 d |
+| owner, admin | Passkey, or password + **TOTP** | 12 h / 7 d |
 | adult | Password + TOTP, or passkey | 14 d / 30 d |
 | child | Password (MFA encouraged), or passkey | 14 d / 30 d |
 | guest | Password + TOTP, or passkey | 1 d / until `expires_at` |
 
-- TOTP and passkeys are handled by the IdP ([ADR-001](001-identity.md)). Atlas never sees credentials.
-- Atlas keeps a mapping from role to required IdP group/policy. If a person's role changes, the console updates their IdP group. Login is refused if the IdP group and the Atlas role disagree.
+- With the bundled IdP, Atlas keeps the person's IdP group in sync with their Atlas role.
+- Login is refused if the group and the role disagree, which avoids a "child" account that got admin MFA exemptions.
 
 ### 3. Step-up authentication for admin actions
 
-- Permissions flagged `step_up` require the session's `strong_auth_at` to be under **5 minutes** old ([ADR-002](002-authorization.md) rule 6). Examples: user create/disable/reset, role and permission edits, module enable/disable, connector edits, session revocation for others, break-glass review.
+- Permissions flagged `step_up` ([ADR-002](002-authorization.md) rule 6) require `strong_auth_at` to be newer than `ATLAS_STEP_UP_MAX_AGE` (default 300 s). Examples: user create/disable/reset, role and permission edits, module enable/disable, connector edits, revoking others' sessions.
 - Re-auth works like this:
   1. Atlas starts an OIDC request with `prompt=login`, `max_age=0`.
-  2. On return, it verifies the ID token's `auth_time`.
+  2. It verifies the returned `auth_time`.
   3. It updates `strong_auth_at`.
   4. It **rotates the session ID**.
-- Step-up is per session, never shared across devices.
+- Step-up is per session.
 
 ### 4. Sessions and revocation
 
 **Storage:**
 - Server-side sessions in Postgres: `sessions(id_hash, user_id, created_at, last_seen_at, strong_auth_at, ip, user_agent, revoked_at)`.
-- The cookie carries a 256-bit random ID. The DB stores only its SHA-256.
+- The cookie carries a 256-bit random ID, and the DB stores only its SHA-256.
 
 **Cookie:**
 - `__Host-atlas_session`, with `Secure; HttpOnly; SameSite=Lax; Path=/`. No `Domain`.
-- Nothing auth-related goes in `localStorage`. That closes audit A4.
+- Nothing auth-related goes in `localStorage`, which closes A4.
 
 **CSRF:**
-- Unsafe methods require an `X-CSRF-Token` header that matches a per-session token (synchronizer pattern), as well as SameSite.
-- The SPA reads the token from a non-HttpOnly endpoint response, not from a cookie.
+- Unsafe methods require `X-CSRF-Token` matching a per-session token (synchronizer pattern), on top of SameSite.
 
 **Revocation:**
-- Users see their active sessions and can end any of them.
+- Users can list and end their own sessions.
 - Admins can end all sessions for a user.
-- Disabling a user, changing their role, or reaching a guest's `expires_at` **ends all of that user's Atlas sessions immediately**, and asks the IdP to end its sessions too where the IdP supports it.
-- Logout deletes the session row and calls the IdP's end-session endpoint.
-- Every authenticated request checks the session row, so revocation takes effect on the next request with no token-expiry wait. That closes audit A3.
+- Disabling a user, changing their role, or reaching a guest's `expires_at` ends all of that user's Atlas sessions immediately, and asks the IdP to end its sessions too where the adapter supports it (spike item 10).
+- Logout deletes the session and calls the IdP's end-session endpoint.
+- Every request checks the session row, so revocation is immediate. That closes A3.
 
 **Rotation:**
-- New session ID on login, on step-up, and on role change.
+- New session ID on login, on step-up and on role change.
 
-### 5. Rate limiting (three layers)
+### 5. Rate limiting (layered)
 
-1. **Cloudflare edge:** rate-limit rules on the IdP's authentication endpoints and on Atlas `/api/auth/*`. Bot-fight / WAF managed rules stay on for both hostnames.
-2. **nginx:** `limit_req` keyed by the real client IP. There's a strict zone for `/api/auth/*` and step-up callbacks (around 10 requests/min, small burst) and a general zone for `/api/*`. Upload size is capped with `client_max_body_size`, which comes from config; v1 has no uploads, so it starts small.
-3. **App:** a per-account and per-IP counter in Postgres for sensitive actions (login callbacks, step-up, admin mutations, break-glass). It returns 429 with `Retry-After`. Credential brute-force lockout belongs to the IdP, which Kanidm does natively.
+1. **Edge (if your exposure option has one):** with Cloudflare, add rate-limit rules on the IdP's authentication endpoints and on Atlas `/api/auth/*`, and enable managed WAF rules. With your own proxy, add the equivalent (e.g. a Caddy/Traefik rate-limit plugin) if available.
+2. **Bundled proxy (always on):** `limit_req` keyed by the real client IP. There's a strict zone for `/api/auth/*` and step-up callbacks (`ATLAS_RATE_LIMIT_AUTH`, default 10 requests/min, small burst) and a general zone for `/api/*`. `client_max_body_size` comes from `ATLAS_MAX_BODY_SIZE`.
+3. **App (always on):** a per-account and per-IP counter in Postgres for sensitive actions (auth callbacks, step-up, admin mutations, break-glass). It returns 429 with `Retry-After`.
+   - Credential brute-force lockout belongs to the IdP, which Kanidm handles natively.
 
-### 6. Cloudflare Access: in front, or not?
+### 6. Cloudflare Access (only relevant to option 1)
 
 **Trade-off:**
-- Access (a Zero-Trust login wall at the edge) adds a strong pre-authentication layer.
-- It also breaks or degrades non-browser and API clients: Immich mobile, OIDC back-channel/discovery fetches, PWA background requests, and future Hermes and API tokens.
-- It also forces a second login for family members.
+- Access adds a strong pre-authentication layer at the edge.
+- It also breaks or degrades non-browser clients: Immich mobile, OIDC back-channel and discovery calls, PWA background requests, future API tokens.
+- It adds a second login for household members.
 
-**Decision:**
+**Recommendation when using the tunnel:**
 
 | Surface | Cloudflare Access? | Reason |
 |---|---|---|
-| Atlas user app and API (`<atlas-host>/*`) | **No** | Family UX; PWA requests; the app is already protected by IdP login + sessions |
-| IdP user-facing endpoints (authorize, token, JWKS, discovery, login UI) | **No** | Immich mobile and Atlas server-to-server OIDC calls must reach them without an Access challenge |
-| Immich (`<immich-host>`) | **No** | The mobile app can't pass Access. Protected by its own login via SSO |
-| **Atlas admin console paths** (`/admin*`, `/api/v1/admin/*`) | **Yes (recommended)**, added in Phase 11 | Browser-only and used by 1–2 people. Policy: owner/admin identities only. Defense in depth if an app-layer bug ever exposes admin routes |
-| **IdP admin UI/API paths** (if exposed at all) | **Yes**, or not routed through the tunnel at all | Keep IdP administration on-host via CLI or behind Access |
+| Atlas user app and API | **No** | Household UX, PWA requests. Protected by IdP login and Atlas sessions |
+| IdP user-facing endpoints (authorize, token, JWKS, discovery, login UI) | **No** | Immich mobile and server-to-server OIDC calls must reach them without a challenge |
+| Immich | **No** | The mobile app can't pass Access. Protected by its own SSO login |
+| **Atlas admin console paths** (`/admin*`, `/api/v1/admin/*`) | **Yes (recommended)** | Browser-only, used by 1–2 people. Policy: owner/admin identities only. Defense in depth |
+| **IdP admin surfaces** (if routed at all) | **Yes**, or don't route them publicly | Prefer administering the bundled IdP via `docker compose exec` |
 
 **Rules:**
-- Atlas must be fully secure **without** Access. Access is an extra layer and is never relied on.
-- No security decision in the app reads Access headers.
+- Atlas must be fully secure **without** Access. No security decision in the app reads Access headers.
+- Operators of options 2–4 can get a similar effect by restricting `/admin*` at their own proxy (e.g. to VPN/LAN source ranges).
 
-## Additional hardening (nginx and app)
+## Additional hardening (bundled proxy and app)
 
-**Response headers:**
-- `Strict-Transport-Security` (set at the edge or in nginx).
-- `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'`, plus connect-src limited to self.
-- `X-Content-Type-Options: nosniff`.
-- `Referrer-Policy: same-origin`.
-- `Permissions-Policy` minimal.
+**Headers:**
+- `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: same-origin`
+- A minimal `Permissions-Policy`
+- `Strict-Transport-Security` when `ATLAS_PUBLIC_URL` is HTTPS (that's required in production)
 
 **CORS:**
-- Not needed: the SPA and API are same-origin.
-- CORS is disabled in production; dev origins come from config (audit I2).
+- Off in production, because the SPA and API are same-origin.
+- Dev origins come from `ATLAS_DEV_CORS_ORIGINS`.
 
-**Pagination:**
-- Bounded everywhere (`limit ≤ 100`), so no endpoint can dump a table (audit I4).
-
-**Errors:**
+**Other:**
+- Bounded pagination (`limit ≤ 100`).
 - Uniform error bodies with no exception class names (audit F7).
-
-**`/health`:**
-- Returns exactly `{"status":"ok"}` with no auth and no dependency details.
-- A separate `/health/ready` checks DB and IdP reachability. nginx routes it only from loopback.
+- **`/health`** returns exactly `{"status":"ok"}`, with no auth and no dependency details.
+- `/health/ready` checks DB and IdP reachability, and the bundled proxy answers it only for requests from `ATLAS_TRUSTED_PROXY_CIDRS`.
 
 ## Consequences
 
-- One public hostname each for Atlas and the IdP (plus Immich's own), all through the same tunnel and nginx.
-- Revocation is immediate, at the cost of one indexed session lookup per request. That's trivial at family scale.
-- Admin flows need a re-login every 5 minutes of admin work. This is intentional, and the window is configurable.
-- Without Access on user paths, the edge doesn't stop credential-stuffing at the door. The IdP's lockout, MFA requirements and edge rate rules cover it.
+- Operators need two public HTTPS hostnames (Atlas, IdP) plus Immich's own. They're all served through the same entry point.
+- Revocation is immediate, at the cost of one indexed lookup per request, which is trivial at household scale.
+- Admin work prompts a re-login every few minutes, which is intentional and configurable.
+- Security doesn't depend on the exposure option. The edge layers only add defense in depth.
 
 ## Verification
 
-- nginx config test in CI: `nginx -t`. A container test asserts that only `127.0.0.1:8081` is bound and that unknown `Host` is dropped.
+- `nginx -t` in CI.
+- Compose test:
+  - only `atlas-proxy` publishes a port;
+  - the default bind is loopback;
+  - unknown `Host` is dropped;
+  - the real-IP header is ignored from untrusted peers.
 - Session tests:
-  - revoke → next request 401;
+  - revoke → 401;
   - disable user → all sessions gone;
-  - session ID rotates on login and step-up;
-  - cookie flags asserted.
-- CSRF test: an unsafe request without or with a wrong token gives 403.
-- Rate-limit test: the N+1-th auth callback in a window gives 429.
-- Headers test: CSP, nosniff and frame-ancestors are present on HTML and API responses.
-- Docs disabled in production settings (a test asserts 404).
+  - rotation on login and step-up;
+  - cookie flags.
+- CSRF: an unsafe request without the token gives 403.
+- Rate limit: the N+1-th auth callback in a window gives 429.
+- Headers present on HTML and API responses.
+- Docs → 404 in production.
