@@ -49,3 +49,19 @@ def validate_secret_key(value: str | None) -> str:
 @lru_cache(maxsize=1)
 def get_secret_key() -> str:
     return validate_secret_key(os.getenv("SECRET_KEY"))
+
+
+DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def get_max_upload_bytes() -> int:
+    raw = os.getenv("ATLAS_MAX_UPLOAD_BYTES")
+    if raw is None or raw == "":
+        return DEFAULT_MAX_UPLOAD_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        raise InsecureConfigError("ATLAS_MAX_UPLOAD_BYTES must be a positive integer (bytes)")
+    if value <= 0:
+        raise InsecureConfigError("ATLAS_MAX_UPLOAD_BYTES must be a positive integer (bytes)")
+    return value

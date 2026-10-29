@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import BinaryIO, Tuple
 
-from core.storage.base import StorageBackend
+from core.storage.base import StorageBackend, UploadTooLarge
 
 CHUNK_SIZE = 1024 * 1024  # 1MB
 
@@ -15,7 +15,7 @@ class LocalStorage(StorageBackend):
     def __init__(self, data_dir: str | None = None):
         self.data_dir = Path(data_dir or os.getenv("ATLAS_DATA_DIR", "data"))
 
-    def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
+    def save(self, object_id: int, src: BinaryIO, max_bytes: int | None = None) -> Tuple[str, int]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         final_path = self.data_dir / str(object_id)
         tmp_path = self.data_dir / f".{object_id}.tmp"
@@ -27,8 +27,10 @@ class LocalStorage(StorageBackend):
                     chunk = src.read(CHUNK_SIZE)
                     if not chunk:
                         break
-                    f.write(chunk)
                     size += len(chunk)
+                    if max_bytes is not None and size > max_bytes:
+                        raise UploadTooLarge()
+                    f.write(chunk)
             os.replace(tmp_path, final_path)
             return str(final_path), size
         except Exception:

@@ -31,6 +31,8 @@ from core.domain.objects import (
     set_status,
     trash_object_recursive,
 )
+from core.security import get_max_upload_bytes
+from core.storage.base import UploadTooLarge
 from core.storage.factory import get_storage
 
 router = APIRouter(prefix="/objects", tags=["objects"])
@@ -56,7 +58,7 @@ def upload_object(
 
     try:
         obj_id = create_object(db, obj_type, name, parent_id, owner_id=current_user.id, commit=False)
-        path, size = storage.save(obj_id, file.file)
+        path, size = storage.save(obj_id, file.file, max_bytes=get_max_upload_bytes())
         attach_storage(db, obj_id, path, commit=False)
         attach_metadata(db, obj_id, size, mime_type, created_at, commit=False)
         set_status(db, obj_id, "ready", commit=False)
@@ -83,6 +85,8 @@ def upload_object(
                 set_status(db, obj_id, "failed", commit=True)
             except Exception:
                 pass
+        if isinstance(e, UploadTooLarge):
+            raise HTTPException(status_code=413, detail="upload too large")
         raise HTTPException(status_code=500, detail=f"upload failed: {type(e).__name__}")
 
 

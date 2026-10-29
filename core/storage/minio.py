@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import BinaryIO, Tuple
 
-from core.storage.base import StorageBackend
+from core.storage.base import StorageBackend, UploadTooLarge
 
 
 class MinIOStorage(StorageBackend):
@@ -43,10 +43,12 @@ class MinIOStorage(StorageBackend):
         if not self.client.bucket_exists(self.bucket):
             self.client.make_bucket(self.bucket)
 
-    def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
-        # อ่านข้อมูลก่อนเพื่อรู้ขนาด
-        data = src.read()
+    def save(self, object_id: int, src: BinaryIO, max_bytes: int | None = None) -> Tuple[str, int]:
+        # อ่านข้อมูลก่อนเพื่อรู้ขนาด (read at most max_bytes + 1 to enforce the cap)
+        data = src.read() if max_bytes is None else src.read(max_bytes + 1)
         size = len(data)
+        if max_bytes is not None and size > max_bytes:
+            raise UploadTooLarge()
 
         import io
         storage_key = f"objects/{object_id}"
