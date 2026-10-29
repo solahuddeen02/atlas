@@ -11,13 +11,17 @@ from core.apps.auth.dependencies import get_current_user
 from core.db.models import User
 
 from core.db.session import get_db
+from core.apps.objects.access import (
+    ensure_not_moving_into_itself,
+    get_owned_folder,
+    get_owned_object,
+)
 from core.apps.objects.schemas import RenameRequest
 from core.domain.objects import (
     attach_metadata,
     attach_storage,
     create_object,
     empty_trash,
-    get_object,
     list_objects,
     list_trash,
     move_object,
@@ -32,15 +36,6 @@ from core.storage.factory import get_storage
 router = APIRouter(prefix="/objects", tags=["objects"])
 
 
-def _get_owned_object(db: Session, obj_id: int, current_user: User) -> dict:
-    obj = get_object(db, obj_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="object not found")
-    if obj["owner_id"] != current_user.id:
-        raise HTTPException(status_code=403, detail="forbidden")
-    return obj
-
-
 @router.post("/upload")
 def upload_object(
     obj_type: str,
@@ -50,6 +45,9 @@ def upload_object(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if parent_id is not None:
+        get_owned_folder(db, parent_id, current_user)
+
     path = None
     obj_id: int | None = None
     created_at = datetime.now(timezone.utc).isoformat()
@@ -94,7 +92,7 @@ def download_object(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    obj = _get_owned_object(db, obj_id, current_user)
+    obj = get_owned_object(db, obj_id, current_user)
 
     storage = get_storage()
     if not obj["storage"] or not storage.exists(obj["storage"]):
@@ -130,7 +128,10 @@ def move_object_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_owned_object(db, obj_id, current_user)
+    get_owned_object(db, obj_id, current_user)
+    if new_parent_id is not None:
+        target = get_owned_folder(db, new_parent_id, current_user)
+        ensure_not_moving_into_itself(db, obj_id, target)
     move_object(db, obj_id, new_parent_id)
     return {"id": obj_id, "new_parent_id": new_parent_id, "status": "moved"}
 
@@ -167,7 +168,7 @@ def restore_object_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_owned_object(db, obj_id, current_user)
+    get_owned_object(db, obj_id, current_user)
     restore_object(db, obj_id)
     return {"id": obj_id, "status": "restored"}
 
@@ -179,7 +180,7 @@ def rename_object_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_owned_object(db, obj_id, current_user)
+    get_owned_object(db, obj_id, current_user)
     rename_object(db, obj_id, body.name)
     return {"id": obj_id, "name": body.name}
 
@@ -190,7 +191,7 @@ def delete_object(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_owned_object(db, obj_id, current_user)
+    get_owned_object(db, obj_id, current_user)
     trash_object_recursive(db, obj_id)
     return {"status": "trashed", "id": obj_id}
 
@@ -201,7 +202,9 @@ def permanent_delete_object_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_owned_object(db, obj_id, current_user)
+    obj = get_owned_object(db, obj_id, current_user)
+    if obj["deleted_at"] is None:
+        raise HTTPException(status_code=409, detail="object is not in trash")
     storage_key = permanent_delete_object(db, obj_id)
 
     if storage_key:

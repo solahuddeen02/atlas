@@ -180,12 +180,15 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         Object.storage_key,
         Object.status,
         Object.owner_id,
+        Object.parent_id,
+        Object.deleted_at,
     ).where(Object.id == obj_id)
 
     row = db.execute(stmt).one_or_none()
     if not row:
         return None
 
+    # "storage" is internal (a filesystem path for local storage) — never return it to clients
     return {
         "id": row[0],
         "type": row[1],
@@ -193,6 +196,8 @@ def get_object(db: Session, obj_id: int) -> dict[str, Any] | None:
         "storage": row[3],
         "status": row[4],
         "owner_id": row[5],
+        "parent_id": row[6],
+        "deleted_at": row[7],
     }
 
 
@@ -217,7 +222,6 @@ def list_objects(
             Object.id,
             Object.type,
             Object.name,
-            Object.storage_key,
             Object.size,
             Object.mime_type,
             Object.created_at,
@@ -235,11 +239,10 @@ def list_objects(
             "id": r[0],
             "type": r[1],
             "name": r[2],
-            "storage": r[3],
-            "size": r[4],
-            "mime_type": r[5],
-            "created_at": r[6],
-            "status": r[7],
+            "size": r[3],
+            "mime_type": r[4],
+            "created_at": r[5],
+            "status": r[6],
         }
         for r in rows
     ]
@@ -267,7 +270,6 @@ def list_photos(
             Object.id,
             Object.type,
             Object.name,
-            Object.storage_key,
             Object.size,
             Object.mime_type,
             Object.created_at,
@@ -285,11 +287,10 @@ def list_photos(
             "id": r[0],
             "type": "photo",
             "name": r[2],
-            "storage": r[3],
-            "size": r[4],
-            "mime_type": r[5],
-            "created_at": r[6],
-            "status": r[7],
+            "size": r[3],
+            "mime_type": r[4],
+            "created_at": r[5],
+            "status": r[6],
         }
         for r in rows
     ]
