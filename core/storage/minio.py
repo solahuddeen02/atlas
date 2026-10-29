@@ -17,6 +17,11 @@ class MinIOStorage(StorageBackend):
         bucket: str | None = None,
         secure: bool = False,
     ):
+        access_key = access_key or os.getenv("MINIO_ACCESS_KEY")
+        secret_key = secret_key or os.getenv("MINIO_SECRET_KEY")
+        if not access_key or not secret_key:
+            raise RuntimeError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set for the minio backend")
+
         try:
             from minio import Minio
         except ImportError:
@@ -28,8 +33,8 @@ class MinIOStorage(StorageBackend):
         self.bucket = bucket or os.getenv("MINIO_BUCKET", "atlas")
         self.client = Minio(
             endpoint or os.getenv("MINIO_ENDPOINT", "localhost:9000"),
-            access_key=access_key or os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-            secret_key=secret_key or os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+            access_key=access_key,
+            secret_key=secret_key,
             secure=secure,
         )
         self._ensure_bucket()

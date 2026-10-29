@@ -14,9 +14,13 @@ from core.db.init import init_db
 from core.db.session import SessionLocal
 from core.domain.objects import recover_incomplete_uploads
 from core.apps.auth.router import router as auth_router
+from core.security import get_secret_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed: refuse to start without a strong SECRET_KEY
+    get_secret_key()
+
     # Dev only: in production, run `alembic upgrade head` before starting
     init_db()
 

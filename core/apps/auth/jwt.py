@@ -1,13 +1,13 @@
 # core/apps/auth/jwt.py
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
+from core.security import get_secret_key
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
 
@@ -29,11 +29,11 @@ def create_access_token(user_id: int, username: str) -> str:
         "username": username,
         "exp": expire,
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(payload, get_secret_key(), algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict | None:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, get_secret_key(), algorithms=[ALGORITHM])
     except JWTError:
         return None
