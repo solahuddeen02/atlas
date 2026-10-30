@@ -102,6 +102,8 @@
 
 ## Phase 1: Repo hygiene & CI baseline
 
+> **Sequencing note (owner-approved):** Phase 1 started before Spike S. It holds no identity code, so it doesn't build anything on the unverified IdP choice. Phases 2–4 can also do their IdP-agnostic parts before the spike. Their Kanidm-specific parts (the `idp/` secrets and internal CA, the IdP admin token, the bundled-IdP compose service and vhost, the IdP backup) and all of Phase 5 wait for the spike's outcome.
+
 **Work:**
 - `git mv core frontend tests alembic → legacy/…` (paths only). The legacy suite keeps running.
 - Create `atlas/`, `modules/`, `web/` and `deploy/` per ARCHITECTURE §2.

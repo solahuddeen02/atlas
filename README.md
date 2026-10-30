@@ -4,6 +4,10 @@ A self-hosted personal ecosystem inspired by Google Drive and Photos — built o
 
 > Early development — personal R&D project, not production-ready.
 
+> **Repository layout is changing.** Today's app (described below) lives in [`legacy/`](legacy/) and is frozen apart from security fixes.
+> The v1 platform is being built in `atlas/`, `modules/`, `web/` and `deploy/` following [docs/PLAN-v1.md](docs/PLAN-v1.md).
+> See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks CI runs.
+
 ---
 
 ## Vision
@@ -58,7 +62,7 @@ Atlas is a unified self-hosted platform where every entity (file, photo, folder)
 ## Project Structure
 
 ```
-atlas/
+legacy/
 ├── core/
 │   ├── apps/
 │   │   ├── auth/       — register, login endpoints
@@ -71,10 +75,13 @@ atlas/
 ├── frontend/
 │   └── src/            — React components
 ├── alembic/            — database migrations
+├── tests/              — legacy test suite
 ├── scripts/            — dev scripts (run.ps1)
 ├── data/               — file storage at runtime (gitignored)
 └── atlas.db            — SQLite database (gitignored)
 ```
+
+The commands below run from inside `legacy/`. More are in [legacy/COMMANDS.md](legacy/COMMANDS.md).
 
 ---
 
@@ -87,6 +94,8 @@ atlas/
 ### Backend
 
 ```powershell
+cd legacy
+
 # Bootstrap (create .venv + install dependencies)
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 bootstrap
 
@@ -106,7 +115,7 @@ API docs: `http://127.0.0.1:8000/docs`
 ### Frontend
 
 ```powershell
-cd frontend
+cd legacy\frontend
 npm install
 
 # Copy and configure env
@@ -120,6 +129,7 @@ Frontend available at: `http://localhost:5173`
 ### Docker
 
 ```bash
+cd legacy
 cp .env.example .env   # then fill in every value — never commit .env
 docker compose up -d --build
 ```

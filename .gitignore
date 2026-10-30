@@ -20,7 +20,17 @@ CLAUDE.md
 .claude/
 scripts/sync-obsidian.ps1
 
-# Environment / secrets
+# Environment / secrets (ADR-004 §5)
 .env
 .env.*
+*.env
 !.env.example
+secrets/
+backups/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+node_modules/
+.import_linter_cache/

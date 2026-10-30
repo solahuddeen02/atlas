@@ -1,4 +1,6 @@
-# Commands
+# Commands (legacy app)
+
+Run these from inside `legacy/`.
 
 ## Backend
 
