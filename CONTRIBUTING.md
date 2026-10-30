@@ -67,7 +67,8 @@ The linters test themselves: `tests/ci/test_banned_api.py` and `tests/ci/test_co
 ## Dependencies
 
 - Python: edit `pyproject.toml`, then `uv lock`. Commit `uv.lock`.
-- Dependabot opens weekly updates for `uv.lock` and GitHub Actions. Legacy dependencies get security updates only.
+- Dependabot runs weekly for `uv.lock`, `legacy/frontend` (npm) and GitHub Actions. Each ecosystem gets at most two grouped PRs: one with all minor and patch updates, one with all major updates. Security updates still open individually.
+- Legacy Python (`legacy/requirements.txt`) gets security updates only.
 
 ## Never commit
 
