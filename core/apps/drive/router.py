@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from core.apps.auth.dependencies import get_current_user
+from core.apps.objects.access import get_owned_folder
 from core.apps.drive.schemas import CreateFolderRequest
 from core.db.models import User
 from core.db.session import get_db
@@ -29,6 +30,8 @@ def create_folder_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if body.parent_id is not None:
+        get_owned_folder(db, body.parent_id, current_user)
     folder_id = create_folder(db, body.name, body.parent_id, owner_id=current_user.id)
     return {"id": folder_id, "name": body.name, "parent_id": body.parent_id, "type": "folder"}
 

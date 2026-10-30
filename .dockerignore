@@ -8,3 +8,6 @@ data/
 .git/
 .pytest_cache/
 tests/
+
+.env
+.env.*

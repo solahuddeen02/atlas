@@ -1,15 +1,10 @@
 import os
 
-from sqlalchemy.orm import Session
-
-from core.db.session import SessionLocal
 from core.domain.objects import recover_incomplete_uploads
-from core.db.init import init_db
-from core.db.engine import engine
 from core.db.models import Object
 
 
-def test_startup_recovery_marks_uploading_failed_and_deletes_file(test_paths):
+def test_startup_recovery_marks_uploading_failed_and_deletes_file(test_paths, db_session):
     """
     Simulate a crash scenario:
     - DB has object with status='uploading'
@@ -21,16 +16,13 @@ def test_startup_recovery_marks_uploading_failed_and_deletes_file(test_paths):
     """
     data_dir = str(test_paths["data_dir"])
 
-    # Ensure DB schema exists using the current engine/env
-    init_db()
-
-    # Insert a stuck uploading object directly
-    db: Session = SessionLocal()
+    db = db_session
     try:
         obj = Object(
             type="file",
             name="stuck.bin",
             parent_id=None,
+            owner_id=1,
             created_at="2026-01-01T00:00:00",
             status="uploading",
             storage_key=None,
@@ -68,7 +60,7 @@ def test_startup_recovery_marks_uploading_failed_and_deletes_file(test_paths):
         db.close()
 
 
-def test_recovery_deletes_tmp_files(test_paths):
+def test_recovery_deletes_tmp_files(test_paths, db_session):
     """
     If tmp files like '.<id>.tmp' exist, recovery should delete them.
     """
@@ -80,10 +72,7 @@ def test_recovery_deletes_tmp_files(test_paths):
 
     assert tmp_file.exists()
 
-    # init DB (not strictly required for tmp cleanup, but keeps flow consistent)
-    init_db()
-
-    db = SessionLocal()
+    db = db_session
     try:
         stats = recover_incomplete_uploads(db, data_dir=str(data_dir))
         assert stats["deleted_tmp"] >= 1

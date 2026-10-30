@@ -14,9 +14,15 @@ from core.db.init import init_db
 from core.db.session import SessionLocal
 from core.domain.objects import recover_incomplete_uploads
 from core.apps.auth.router import router as auth_router
+from core.security import get_max_upload_bytes, get_secret_key
+from core.upload_limit import UploadSizeLimitMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed: refuse to start without a strong SECRET_KEY or with a bad upload limit
+    get_secret_key()
+    get_max_upload_bytes()
+
     # Dev only: in production, run `alembic upgrade head` before starting
     init_db()
 
@@ -34,6 +40,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Atlas Core", lifespan=lifespan)
 
+# Added before CORS so CORS stays outermost and 413 responses still carry CORS headers
+app.add_middleware(UploadSizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

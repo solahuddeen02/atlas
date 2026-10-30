@@ -93,6 +93,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 bootstrap
 # Run database migrations
 .\.venv\Scripts\python.exe -m alembic upgrade head
 
+# Set a strong SECRET_KEY first (the backend refuses to start without one)
+$env:SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
+
 # Start backend
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 dev
 ```
@@ -114,6 +117,13 @@ npm run dev
 
 Frontend available at: `http://localhost:5173`
 
+### Docker
+
+```bash
+cp .env.example .env   # then fill in every value — never commit .env
+docker compose up -d --build
+```
+
 ---
 
 ## Configuration
@@ -122,7 +132,8 @@ Frontend available at: `http://localhost:5173`
 |---|---|---|
 | `ATLAS_DATA_DIR` | `data/` | Local file storage path |
 | `ATLAS_STORAGE_BACKEND` | `local` | `local` or `minio` |
-| `SECRET_KEY` | — | JWT signing secret |
+| `SECRET_KEY` | **required** | JWT signing secret. Atlas refuses to start if it is missing, shorter than 43 characters, or a known placeholder. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `ATLAS_MAX_UPLOAD_BYTES` | `104857600` (100 MB) | Maximum upload size; larger uploads get `413` |
 | `VITE_API_URL` | `http://127.0.0.1:8000` | Backend URL (frontend) |
 
 ---

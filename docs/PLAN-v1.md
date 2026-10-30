@@ -229,6 +229,8 @@
 
 ## Phase 6: Authorization core (ADR-002)
 
+> **Carried over from Phase 0 (owner decision):** on legacy `main`, `GET /folders/{id}` for another user's folder returns `200 []`. It leaks nothing, so Phase 0 left it unchanged. In the new authorization layer, listing a folder must load it through `get_for(principal, "read", id)` and return **404** for a folder that isn't yours, the same as "not found". The two-user matrix test must cover it.
+
 **Work:**
 - `Principal`. The permission registry and seeding. User overrides.
 - Ceilings and invariants: last owner, admin limits, child/guest ceilings, guest expiry.

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import BinaryIO, Tuple
 
-from core.storage.base import StorageBackend
+from core.storage.base import StorageBackend, UploadTooLarge
 
 
 class MinIOStorage(StorageBackend):
@@ -17,6 +17,11 @@ class MinIOStorage(StorageBackend):
         bucket: str | None = None,
         secure: bool = False,
     ):
+        access_key = access_key or os.getenv("MINIO_ACCESS_KEY")
+        secret_key = secret_key or os.getenv("MINIO_SECRET_KEY")
+        if not access_key or not secret_key:
+            raise RuntimeError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set for the minio backend")
+
         try:
             from minio import Minio
         except ImportError:
@@ -28,8 +33,8 @@ class MinIOStorage(StorageBackend):
         self.bucket = bucket or os.getenv("MINIO_BUCKET", "atlas")
         self.client = Minio(
             endpoint or os.getenv("MINIO_ENDPOINT", "localhost:9000"),
-            access_key=access_key or os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-            secret_key=secret_key or os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+            access_key=access_key,
+            secret_key=secret_key,
             secure=secure,
         )
         self._ensure_bucket()
@@ -38,10 +43,12 @@ class MinIOStorage(StorageBackend):
         if not self.client.bucket_exists(self.bucket):
             self.client.make_bucket(self.bucket)
 
-    def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
-        # อ่านข้อมูลก่อนเพื่อรู้ขนาด
-        data = src.read()
+    def save(self, object_id: int, src: BinaryIO, max_bytes: int | None = None) -> Tuple[str, int]:
+        # อ่านข้อมูลก่อนเพื่อรู้ขนาด (read at most max_bytes + 1 to enforce the cap)
+        data = src.read() if max_bytes is None else src.read(max_bytes + 1)
         size = len(data)
+        if max_bytes is not None and size > max_bytes:
+            raise UploadTooLarge()
 
         import io
         storage_key = f"objects/{object_id}"

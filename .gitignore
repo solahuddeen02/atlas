@@ -19,3 +19,8 @@ Thumbs.db
 CLAUDE.md
 .claude/
 scripts/sync-obsidian.ps1
+
+# Environment / secrets
+.env
+.env.*
+!.env.example

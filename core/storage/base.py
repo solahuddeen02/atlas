@@ -5,12 +5,17 @@ from abc import ABC, abstractmethod
 from typing import BinaryIO, Tuple
 
 
+class UploadTooLarge(Exception):
+    """Raised by save() when the source exceeds max_bytes. Nothing is left in storage."""
+
+
 class StorageBackend(ABC):
 
     @abstractmethod
-    def save(self, object_id: int, src: BinaryIO) -> Tuple[str, int]:
+    def save(self, object_id: int, src: BinaryIO, max_bytes: int | None = None) -> Tuple[str, int]:
         """
-        Save file and return (storage_key, size_bytes)
+        Save file and return (storage_key, size_bytes).
+        Raise UploadTooLarge if more than max_bytes are read.
         """
         ...
 
