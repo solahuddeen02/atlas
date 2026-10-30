@@ -1,13 +1,24 @@
+# Root build context for the v1 images (Phase 4). ADR-004 §5: no env files,
+# secrets, backups, VCS data or tests in any image.
+.git/
+.github/
 .venv/
-__pycache__/
-*.pyc
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/node_modules/
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+backups/
+tests/
+legacy/
+docs/
 *.db
 *.db-shm
 *.db-wal
 data/
-.git/
-.pytest_cache/
-tests/
-
-.env
-.env.*
