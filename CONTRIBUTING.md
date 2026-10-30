@@ -22,6 +22,27 @@ You need [uv](https://docs.astral.sh/uv/) and Node.js 22.
 uv sync
 ```
 
+### Running the API locally
+
+```bash
+uv run atlas-admin init --secrets-dir ./secrets
+```
+
+`secrets/` is git-ignored. `init` only fills in what's missing, so re-running it is safe. Then point the app at those files and set the values `init` doesn't generate yet:
+
+```bash
+export ATLAS_ENV=development
+export ATLAS_ENV_FILES=./secrets/atlas/app.env,./secrets/atlas/connectors.env
+export ATLAS_PUBLIC_URL=http://localhost:8000
+export ATLAS_OIDC_ISSUER=https://id.example.com
+export ATLAS_OIDC_CLIENT_SECRET=dev-only-client-secret
+uv run python -m atlas.kernel.web --host 127.0.0.1
+```
+
+`curl -s http://127.0.0.1:8000/health` should print `{"status":"ok"}`. The OIDC values are placeholders until login lands (Phase 5). Development mode accepts `example.com` and `http://`; production refuses both.
+
+Configuration rules are in [ADR-004](docs/adr/004-config-and-secrets.md). Only `atlas/kernel/config.py` reads the environment. Everything else receives a `Settings`.
+
 ## Checks CI runs
 
 Every job in `.github/workflows/ci.yml` must be green before a PR merges.

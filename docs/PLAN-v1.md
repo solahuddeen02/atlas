@@ -149,6 +149,18 @@
 - `tests/cli/test_init.py`: generation, modes, idempotence, no-overwrite.
 - Container test: a placeholder key means exit ≠ 0.
 
+**Deferred until Spike S** (each one is marked `TODO(spike-s)` in the code):
+- `atlas-init` generating the `idp/` directory: the internal CA, its key, and the server certificate and key.
+- `ATLAS_IDP_ADMIN_TOKEN`, and `ATLAS_OIDC_CLIENT_SECRET` for the bundled IdP. Both are written after the IdP bootstrap, which may issue the client secret itself.
+- `ATLAS_IDP_PUBLIC_URL`, the default `ATLAS_OIDC_ISSUER` derived from it, and `ATLAS_IDENTITY_ADMIN=kanidm`.
+- The bundled-IdP lines in `deploy/.env.example` (`ATLAS_IDP_PUBLIC_URL`, `COMPOSE_PROFILES=bundled-idp`, `ATLAS_IDP_VOLUME`).
+
+Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_SECRET` are set by hand (the BYO flow). `ATLAS_OIDC_INTERNAL_URL` and `ATLAS_OIDC_CA_FILE` move to Phase 5, which uses them.
+
+**Moved to Phase 4**, because there's no v1 image or compose file before it:
+- The container test. Phase 2 runs the same check at process level: `python -m atlas.kernel.web` exits 2 before binding a socket.
+- `docker compose config` rendering from `.env.example`. Phase 2 lints `.env.example` instead.
+
 ## Phase 3: Database & migrations (ADR-005)
 
 **Work:**
