@@ -1,0 +1,72 @@
+[project]
+name = "atlas"
+version = "0.0.0"
+description = "Self-hosted household platform (v1). See docs/PLAN-v1.md."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.1",
+    "mypy>=1.13",
+    "pip-audit>=2.7",
+    "pytest>=8.3",
+    "pyyaml>=6.0",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0",
+]
+
+[tool.uv]
+# Not packaged yet: run from the checkout. Revisit when atlas-admin needs an entry point (Phase 2).
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["-q", "--import-mode=importlib", "--strict-markers"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# legacy/ is frozen until v2 and has its own conventions.
+extend-exclude = ["legacy"]
+# Python only: ruff can also format code blocks in Markdown, which would rewrite the docs.
+include = ["*.py", "*.pyi"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# ADR-004 §1: only atlas/kernel/config.py reads the environment.
+"os.getenv".msg = "Read configuration through atlas.kernel.config.Settings (ADR-004)."
+"os.environ".msg = "Read configuration through atlas.kernel.config.Settings (ADR-004)."
+"os.putenv".msg = "Read configuration through atlas.kernel.config.Settings (ADR-004)."
+"os.unsetenv".msg = "Read configuration through atlas.kernel.config.Settings (ADR-004)."
+
+[tool.ruff.lint.per-file-ignores]
+"atlas/kernel/config.py" = ["TID251"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+packages = ["atlas"]
+
+[tool.importlinter]
+root_packages = ["atlas", "modules"]
+
+[[tool.importlinter.contracts]]
+name = "Modules never import the kernel (only atlas.sdk)"
+type = "forbidden"
+source_modules = ["modules"]
+forbidden_modules = ["atlas.kernel"]
+
+[[tool.importlinter.contracts]]
+name = "The kernel never imports modules"
+type = "forbidden"
+source_modules = ["atlas.kernel"]
+forbidden_modules = ["modules"]
+
+# ARCHITECTURE §2 rule 1 also forbids module-to-module imports. That becomes an
+# "independence" contract once there are at least two modules (Phase 7: hello, immich).
