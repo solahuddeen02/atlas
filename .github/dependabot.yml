@@ -1,24 +1,57 @@
+# Each ecosystem opens at most two PRs a week: one with every minor/patch update,
+# and one with every major update (reviewed on its own, since majors can break).
+# Groups apply to version updates; security updates still open individually.
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    # The uv updater also picks up requirements files; legacy/ is handled below.
+    exclude-paths:
+      - "legacy/**"
+    commit-message:
+      prefix: deps
+    groups:
+      uv-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      uv-major:
+        patterns: ["*"]
+        update-types: [major]
 
   - package-ecosystem: pip
     directory: /legacy
     schedule:
       interval: weekly
-    # Legacy is frozen: security updates only.
+    # Legacy Python is frozen: security updates only.
     open-pull-requests-limit: 0
 
   - package-ecosystem: npm
     directory: /legacy/frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
+    # The required `web` (build) and `audit` checks guard these updates.
+    commit-message:
+      prefix: deps
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      npm-major:
+        patterns: ["*"]
+        update-types: [major]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      actions-major:
+        patterns: ["*"]
+        update-types: [major]
