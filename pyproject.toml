@@ -5,10 +5,28 @@ description = "Self-hosted household platform (v1). See docs/PLAN-v1.md."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "uvicorn>=0.32",
+]
+
+[project.scripts]
+atlas-admin = "atlas.kernel.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atlas"
+module-root = ""
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28",
     "import-linter>=2.1",
     "mypy>=1.13",
     "pip-audit>=2.7",
@@ -17,10 +35,6 @@ dev = [
     "ruff>=0.8",
     "types-pyyaml>=6.0",
 ]
-
-[tool.uv]
-# Not packaged yet: run from the checkout. Revisit when atlas-admin needs an entry point (Phase 2).
-package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -47,11 +61,14 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
 
 [tool.ruff.lint.per-file-ignores]
 "atlas/kernel/config.py" = ["TID251"]
+# Test isolation clears config variables from the process environment.
+"tests/conftest.py" = ["TID251"]
 
 [tool.mypy]
 strict = true
 python_version = "3.11"
 packages = ["atlas"]
+plugins = ["pydantic.mypy"]
 
 [tool.importlinter]
 root_packages = ["atlas", "modules"]

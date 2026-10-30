@@ -1,0 +1,166 @@
+"""`atlas-admin init`: generate missing secrets (ADR-004 §3).
+
+Rules:
+- Directories are created `0700` and files `0600`.
+- An existing file is never rewritten. If an env file lacks a key (or its value is
+  empty), only that key is appended; every existing line stays as it was. This is
+  what makes "delete the line and re-run" rotate a secret (ADR-004 §6).
+- Values come from `secrets` (the OS CSPRNG) and are never printed.
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import stat
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+DB_HOST = "postgres"
+DB_PORT = 5432
+DB_NAME = "atlas"
+APP_ROLE = "atlas_app"
+MIGRATOR_ROLE = "atlas_migrator"
+
+DIR_MODE = 0o700
+FILE_MODE = 0o600
+
+
+class InitError(RuntimeError):
+    pass
+
+
+def _token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _database_url(role: str) -> str:
+    return f"postgresql+psycopg://{role}:{_token()}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+
+# Keys generated into atlas/app.env, in file order.
+APP_ENV_GENERATORS: dict[str, Callable[[], str]] = {
+    "SECRET_KEY": _token,
+    "DATABASE_URL": lambda: _database_url(APP_ROLE),
+    "ATLAS_MIGRATOR_DATABASE_URL": lambda: _database_url(MIGRATOR_ROLE),
+}
+# TODO(spike-s): bundled IdP only, after its bootstrap: ATLAS_OIDC_CLIENT_SECRET and
+# ATLAS_IDP_ADMIN_TOKEN in atlas/app.env, and the idp/ directory (internal CA, its key,
+# server certificate and key). Not generated until Spike S confirms the IdP.
+# TODO(phase-3): create the atlas_app/atlas_migrator roles from these passwords, and set
+# file ownership for the postgres container's uid.
+
+
+@dataclass
+class InitReport:
+    created: list[str] = field(default_factory=list)
+    appended: list[str] = field(default_factory=list)
+    kept: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def lines(self) -> list[str]:
+        out = [f"created {item}" for item in self.created]
+        out += [f"added {item}" for item in self.appended]
+        out += [f"kept {item}" for item in self.kept]
+        out += [f"warning: {item}" for item in self.warnings]
+        return out
+
+
+def _ensure_dir(path: Path, root: Path, report: InitReport) -> None:
+    label = f"{path.relative_to(root)}/" if path != root else f"{path}/"
+    if path.exists():
+        if not path.is_dir():
+            raise InitError(f"{path} exists and is not a directory")
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            report.warnings.append(f"{label} is accessible by group/others; consider chmod 700")
+        return
+    path.mkdir(mode=DIR_MODE, parents=True)
+    os.chmod(path, DIR_MODE)  # mkdir's mode is filtered by the umask
+    report.created.append(label)
+
+
+def _write_new_file(path: Path, content: str) -> None:
+    """Create `path` with mode 0600. Fails instead of replacing a file that appeared meanwhile."""
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.link(tmp, path)  # raises FileExistsError rather than overwriting
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _env_lines(values: dict[str, str]) -> str:
+    return "".join(f"{key}={value}\n" for key, value in values.items())
+
+
+def _ensure_env_file(
+    path: Path,
+    root: Path,
+    generators: dict[str, Callable[[], str]],
+    report: InitReport,
+    header: str,
+) -> None:
+    label = str(path.relative_to(root))
+    if not path.exists():
+        _write_new_file(path, header + _env_lines({k: gen() for k, gen in generators.items()}))
+        keys = ", ".join(generators)
+        report.created.append(f"{label}" + (f" ({keys})" if keys else ""))
+        return
+
+    if not path.is_file():
+        raise InitError(f"{path} exists and is not a regular file")
+    existing = dotenv_values(path)
+    missing = {k: gen for k, gen in generators.items() if not existing.get(k)}
+    if not missing:
+        report.kept.append(label)
+        return
+
+    text = path.read_text(encoding="utf-8")
+    prefix = "" if text == "" or text.endswith("\n") else "\n"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(prefix + _env_lines({k: gen() for k, gen in missing.items()}))
+        fh.flush()
+        os.fsync(fh.fileno())
+    report.appended.append(f"{', '.join(missing)} to {label}")
+
+
+def _ensure_secret_file(path: Path, root: Path, report: InitReport) -> None:
+    label = str(path.relative_to(root))
+    if path.exists():
+        report.kept.append(label)
+        return
+    _write_new_file(path, _token() + "\n")
+    report.created.append(label)
+
+
+APP_ENV_HEADER = (
+    "# Generated by `atlas-admin init`. Secrets: never commit or share this file.\n"
+    "# Delete a line and re-run `atlas-admin init` to regenerate that value.\n"
+)
+CONNECTORS_ENV_HEADER = (
+    "# Connector secrets referenced from the admin console, e.g.\n"
+    "# ATLAS_CONNECTOR_IMMICH_API_KEY=...\n"
+)
+
+
+def run_init(secrets_dir: Path) -> InitReport:
+    root = secrets_dir
+    report = InitReport()
+    _ensure_dir(root, root, report)
+
+    atlas_dir = root / "atlas"
+    _ensure_dir(atlas_dir, root, report)
+    _ensure_env_file(atlas_dir / "app.env", root, APP_ENV_GENERATORS, report, APP_ENV_HEADER)
+    _ensure_env_file(atlas_dir / "connectors.env", root, {}, report, CONNECTORS_ENV_HEADER)
+
+    postgres_dir = root / "postgres"
+    _ensure_dir(postgres_dir, root, report)
+    _ensure_secret_file(postgres_dir / "password", root, report)
+    return report
