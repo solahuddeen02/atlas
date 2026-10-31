@@ -126,3 +126,33 @@ def test_no_hsts_for_http(render: Render) -> None:
     assert result.returncode == 0, result.stderr
     assert "Strict-Transport-Security" not in conf
     assert "server_name atlas.home.arpa;" in conf
+
+
+def test_unwritable_config_dir_refuses_clearly(tmp_path: Path) -> None:
+    # What happened in CI when the proxy's tmpfs belonged to root: the script must
+    # stop at once with a message naming the directory, not carry on half-written.
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "nginx").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "nginx").chmod(0o755)
+    conf = tmp_path / "conf"
+    conf.mkdir(mode=0o500)
+    result = subprocess.run(
+        ["sh", str(SCRIPT)],
+        env={
+            "PATH": f"{stub}:/usr/local/bin:/usr/bin:/bin",
+            "ATLAS_PROXY_CONF_DIR": str(conf),
+            "ATLAS_PUBLIC_URL": "https://atlas.home.arpa",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert f"cannot write {conf}" in result.stderr
+    assert "Permission denied" not in result.stderr  # failed before any write
+    assert list(conf.iterdir()) == []

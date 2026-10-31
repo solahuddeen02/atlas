@@ -125,9 +125,11 @@ services:
     image: nginxinc/nginx-unprivileged@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
     restart: unless-stopped
     read_only: true
+    # Owned by nginx-unprivileged's uid/gid 101: the startup script renders its
+    # config into conf.d and nginx keeps its pid and temp files in /tmp.
     tmpfs:
-      - /tmp
-      - /etc/nginx/conf.d
+      - /tmp:uid=101,gid=101,mode=0700
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0700
     ports:
       - "${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}:8080"
     environment:

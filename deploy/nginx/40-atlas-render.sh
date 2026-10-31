@@ -39,6 +39,12 @@ matches() {  # matches <value> <extended regex>
     printf '%s\n' "$1" | grep -Eq "$2"
 }
 
+# The config dir is a tmpfs that must belong to the nginx user (see docker-compose.yml).
+if ! [ -d "$CONF_DIR" ] || ! [ -w "$CONF_DIR" ]; then
+    die "cannot write $CONF_DIR as uid $(id -u); it must be a directory owned by that user" \
+        "(atlas-proxy's tmpfs mounts set uid/gid 101)"
+fi
+
 # --- Public URL ----------------------------------------------------------------
 url="${ATLAS_PUBLIC_URL:-}"
 [ -n "$url" ] || die "ATLAS_PUBLIC_URL is not set (set it in deploy/.env)"
@@ -208,6 +214,8 @@ proxy_set_header X-Forwarded-Proto $scheme;
 proxy_set_header X-Forwarded-Host \$host;
 proxy_read_timeout 60s;
 EOF
+
+[ -s "$OUT" ] && [ -s "$INC" ] || die "could not write the nginx configuration to $CONF_DIR"
 
 echo "atlas-proxy: serving $host; trusted peers:$(printf ' %s' $trusted)"
 nginx -t -q || die "generated nginx configuration is invalid"
