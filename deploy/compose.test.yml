@@ -1,0 +1,6 @@
+# Test-only overlay (tests/compose). Publishes the API on loopback so tests can
+# reach it. Never use this file for a real deployment.
+services:
+  atlas-api:
+    ports:
+      - "127.0.0.1:${ATLAS_TEST_API_PORT:?set by the test harness}:8000"

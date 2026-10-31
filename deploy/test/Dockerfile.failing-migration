@@ -1,0 +1,5 @@
+# Test-only image: atlas:local plus a migration that always fails.
+# Build: docker build -t atlas:failing-migration -f Dockerfile.failing-migration deploy/test
+ARG BASE=atlas:local
+FROM ${BASE}
+COPY 0002_injected_failure.py /opt/atlas/venv/lib/python3.11/site-packages/atlas/kernel/migrations/versions/

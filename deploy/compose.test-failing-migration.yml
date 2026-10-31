@@ -1,0 +1,7 @@
+# Test-only overlay: atlas-migrate runs an image with an extra migration that
+# always fails (deploy/test/Dockerfile.failing-migration). Used by
+# test_failed_migration_blocks_api, which pre-builds the image and runs
+# `up --no-build`. Nothing in the real stack enables this.
+services:
+  atlas-migrate:
+    image: atlas:failing-migration
