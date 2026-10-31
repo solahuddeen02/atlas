@@ -16,7 +16,7 @@ Today Atlas issues its own HS256 JWTs. The audit found:
 - no password policy (A5);
 - no rate limiting (A6).
 
-v1 has to deliver:
+Foundation has to deliver:
 
 - household accounts with roles;
 - 2FA (TOTP, ideally passkeys too), strongest for owner/admin;

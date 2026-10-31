@@ -1,4 +1,4 @@
-# Atlas architecture (v1 target)
+# Atlas architecture (Foundation target)
 
 - **Status:** Proposed design. Nothing here is implemented yet.
 - **Reads with:** [VISION](VISION.md) · [SELF_HOSTING](SELF_HOSTING.md) · [AUDIT](AUDIT.md) · ADRs [001 identity](adr/001-identity.md) · [002 authorization](adr/002-authorization.md) · [003 internet exposure](adr/003-internet-exposure.md) · [004 config & secrets](adr/004-config-and-secrets.md) · [005 database & migrations](adr/005-database-and-migrations.md) · [PLAN-v1](PLAN-v1.md)
@@ -71,13 +71,13 @@ atlas/
     cli/             atlas-admin: init, migrate, backup, restore, bootstrap-owner, break-glass, rotate-*
   sdk/               the ONLY import surface for modules (stable, versioned)
 modules/
-  hello/             tiny reference module (used by tests; v1)
-  immich/            connector module: nav link, health, SSO hand-off (v1)
-  files/ drive/      (v2, ported from today's legacy code)
-  lift/              (v3+)
+  hello/             tiny reference module (used by tests; Foundation)
+  immich/            connector module: nav link, health, SSO hand-off (Foundation)
+  files/ drive/      (First modules, ported from today's legacy code)
+  lift/              (Household apps)
 web/                 React SPA: shell, admin console, web/src/modules/<id>/
 deploy/              docker-compose.yml, .env.example, nginx templates, compose.test.yml
-legacy/              today's core/, frontend/, tests/, alembic/ (moved in Phase 1); not mounted in the v1 app
+legacy/              today's core/, frontend/, tests/, alembic/ (moved in Phase 1); not mounted in the new app
 ```
 
 **Boundary rules, enforced in CI with `import-linter`:**
@@ -143,12 +143,12 @@ A **connector** is a typed, admin-managed link from Atlas to an external service
 |---|---|
 | **Connector type** | Code declared by a module. It defines a config schema (non-secret, e.g. `base_url`), `secret_refs` (env var names, ADR-004), capabilities (`health`, `sso_link`, `user_sync`, `api`) and a client factory |
 | **Instance** | A row in `kernel.connectors`: `id, type, name, config (JSONB, validated), enabled, status, last_checked_at`. Managed in the console (`connectors.manage`, step-up) |
-| **Secrets** | Never in the DB in v1. They live in `${ATLAS_SECRETS_DIR}/atlas/connectors.env` and are referenced by name. The console shows "set" or "missing" |
+| **Secrets** | Never in the DB in Foundation. They live in `${ATLAS_SECRETS_DIR}/atlas/connectors.env` and are referenced by name. The console shows "set" or "missing" |
 | **Health** | Scheduled `health()` with timeouts and backoff. Status shown in the console and in `/health/ready` details (trusted peers only) |
 | **Access** | Modules get a ready client from `sdk.connector("<name>")` behind the module's permission. Modules never see raw secrets |
 | **Outbound safety** | The client allow-lists the configured `base_url` host. No user-supplied URLs are fetched, which prevents server-side request forgery (SSRF) |
 
-**Immich connector (v1):**
+**Immich connector (Foundation):**
 - **Health:** server ping and version.
 - **Nav:** "Photos (Immich)" opens the configured Immich URL, and Immich signs the user in through the same IdP via SSO.
 - **Access:** the console's per-user "Immich access" toggle maps to the IdP group that Immich's OIDC client allows (bundled IdP). With BYO, the operator maps the group in their IdP, and the toggle only controls Atlas's nav entry.
@@ -176,7 +176,7 @@ The event bus is in-process with a transactional outbox, so it's durable without
 **Naming:**
 - `<module>.<entity>.<verb>` in past tense, with a pydantic schema and an integer `version` per type.
 
-**v1 kernel events:**
+**Foundation kernel events:**
 - `kernel.user.created|updated|disabled|enabled|deleted`
 - `kernel.user.role_changed`
 - `kernel.session.revoked`
@@ -209,7 +209,7 @@ The event bus is in-process with a transactional outbox, so it's durable without
 - `timestamptz` in UTC everywhere. FKs and indexes mandatory. UUIDv7 for anything exposed in URLs.
 - External named volume, so `down -v` is safe.
 
-**Kernel tables (v1):**
+**Kernel tables (Foundation):**
 
 | Table | Purpose |
 |---|---|
@@ -228,18 +228,18 @@ The event bus is in-process with a transactional outbox, so it's durable without
 | Bundled IdP data | External volume `${ATLAS_IDP_VOLUME:-atlas_idp}` | ✓ (external) |
 | Secrets | Host dir `${ATLAS_SECRETS_DIR:-./secrets}` | ✓ (host path) |
 | Backups | Host dir `${ATLAS_BACKUP_DIR:-./backups}` | ✓ (host path) |
-| Blob storage (v2) | External volume `${ATLAS_FILES_VOLUME:-atlas_files}`, or S3-compatible storage | ✓ |
+| Blob storage (First modules) | External volume `${ATLAS_FILES_VOLUME:-atlas_files}`, or S3-compatible storage | ✓ |
 
-**Blob storage** (v2) keeps the audit's good parts and fixes the bad ones:
+**Blob storage** (First modules) keeps the audit's good parts and fixes the bad ones:
 - A kernel `StorageBackend` exposed via the SDK.
 - **Backend-relative keys** (`objects/<uuid>`).
 - Streaming, with size limits enforced while streaming.
 - Server-side MIME sniffing.
 - `serve()` returns a response or a presigned URL.
 - S3-compatible storage is optional and tested against a container.
-- v1 stores no user files.
+- Foundation stores no user files.
 
-## 8. Mapping today's code to future modules (v2)
+## 8. Mapping today's code to future modules (First modules)
 
 | Today (`main`) | Becomes | Changes during the port |
 |---|---|---|
@@ -247,7 +247,7 @@ The event bus is in-process with a transactional outbox, so it's durable without
 | `core/db/models.py::Object` + `core/domain/objects.py` | **`files` module** (schema `files`) | FKs, enum `kind`, `timestamptz`, indexes; `get_for/list_for` everywhere (ADR-002); recursive CTE; restore and purge recurse; purge only from trash; RLS backstop |
 | `core/apps/objects/router.py` | Split between **`files`** (item operations) and **`drive`** (user endpoints) | Typed bodies and response models (no storage paths), bounded pagination, server search |
 | `core/apps/drive/router.py` | **`drive` module** (`requires=["files"]`) | Parent loaded via `get_for(principal, "write", parent_id)`, which removes AUDIT O1–O3 by construction |
-| `core/apps/photos/router.py` + `PhotosView` | **Undecided.** Leaning: **Photos = the Immich connector** (nav link + SSO), with no Atlas gallery | Decided at the start of v2. If a light gallery is kept: a `photos` module over `files`, background thumbnails, server-side MIME. Otherwise the legacy photos code is retired |
+| `core/apps/photos/router.py` + `PhotosView` | **Undecided.** Leaning: **Photos = the Immich connector** (nav link + SSO), with no Atlas gallery | Decided at the start of First modules. If a light gallery is kept: a `photos` module over `files`, background thumbnails, server-side MIME. Otherwise the legacy photos code is retired |
 | `core/apps/auth/*` | **Deleted** | Replaced by kernel identity (ADR-001) |
 | `recover_incomplete_uploads` | `files` module **job** | Age-scoped, single-instance, uses the storage interface |
 | `origin/dev` share links | Sharing on kernel `shares` | Hashed tokens, `timestamptz` expiry, `deleted_at` checked, child/guest ceilings |
@@ -255,16 +255,16 @@ The event bus is in-process with a transactional outbox, so it's durable without
 | `frontend/src/*` views | `web/src/modules/drive` (and `photos` if kept) | API client with 401 → re-login, TanStack Query, router URLs |
 | Legacy SQLite data | One-off import script into `files` | Map integer ids; map owners to linked users |
 
-In v1, today's code sits untouched under `legacy/`, except for the Phase 0 security patches. It is **not mounted** in the v1 app.
+During Foundation, today's code sits untouched under `legacy/`, except for the Phase 0 security patches. It is **not mounted** in the new app.
 
 ## 9. Hooks for later (Hermes, lift)
 
-**Hermes (undecided).** v1 only guarantees the extension points.
+**Hermes (undecided).** Foundation only guarantees the extension points.
 - **Events:** an `agent` connector type could subscribe to an allow-listed subset of outbox events.
-- **Scoped service tokens:** the `kernel.api_tokens` table and middleware are designed but **disabled** in v1. Tokens would be hashed, scoped to explicit permissions, tied to a user (as their delegate) or the system, expiring and revocable.
+- **Scoped service tokens:** the `kernel.api_tokens` table and middleware are designed but **disabled** in Foundation. Tokens would be hashed, scoped to explicit permissions, tied to a user (as their delegate) or the system, expiring and revocable.
 - There's no privileged agent path. An agent would go through the same router, permission and `get_for` checks as everyone else.
 
-**lift (v3+).**
+**lift (Household apps).**
 - It becomes `modules/lift` (schema `lift`) with permissions like `lift.access`, `lift.tasks.write` and `lift.journal.read_own`.
 - Journal entries are owner-only, with no default admin read.
 - SQLite data is imported once, routers are adapted to `sdk.router`, and its views move to `web/src/modules/lift`.

@@ -77,7 +77,7 @@ Atlas is public and meant to be self-hosted by others. Configuration has to:
 
 **Repo and compose contain no secret values and no site details.** Compose uses `${VAR:-default}` interpolation only for non-secret settings, and mounts the secrets subdirectories. A CI linter rejects any `environment:` key matching `(?i)(secret|password|token|key)` that has a literal value.
 
-**Connector secrets are not stored in the DB in v1.** The console stores only non-secret connector config plus `secret_ref` names, and shows each as "set" or "missing". If console-entered secrets are ever needed, they'll be encrypted at rest with a key derived from `SECRET_KEY` (HKDF with a purpose label), under a new ADR.
+**Connector secrets are not stored in the DB in Foundation.** The console stores only non-secret connector config plus `secret_ref` names, and shows each as "set" or "missing". If console-entered secrets are ever needed, they'll be encrypted at rest with a key derived from `SECRET_KEY` (HKDF with a purpose label), under a new ADR.
 
 ### 4. Fail closed at startup
 

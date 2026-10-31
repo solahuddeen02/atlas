@@ -25,23 +25,25 @@ Every person in the household has an account with one role:
 ## Where it is going
 
 ```
-v1  Foundation      identity · users & family roles · permissions · admin console · module registry
-v2  First modules   Files (from today's objects code) · Drive · Photos (leaning: Immich link + SSO, see below)
-v3+                 lift (tasks, habits, journal) as a module · Nextcloud-replacement features · Hermes (if decided)
+Foundation       identity · users & family roles · permissions · admin console · module registry   → release 1.0.0
+First modules    Files (from today's objects code) · Drive · Photos (leaning: Immich link + SSO)  → 1.x
+Household apps   lift (tasks, habits, journal) as a module · Nextcloud-replacement features · Hermes (if decided)
 ```
 
-- **Nextcloud.** Atlas aims to replace it over time, module by module. That is not part of v1.
+These are **milestone names, not version numbers**. Releases follow SemVer: 0.x until Foundation ships as 1.0.0, and after that a new module is a MINOR release ([README](../README.md#versioning)).
+
+- **Nextcloud.** Atlas aims to replace it over time, module by module. That is not part of Foundation.
 - **Immich.** It stays a separate service. Atlas integrates it through a connector and single sign-on (SSO) and never re-implements photo management.
-  - **Photos in v2 is undecided.** The current lean is that "Photos" is simply the Immich connector: a nav link plus SSO. No Atlas gallery would duplicate Immich. The final call comes at the start of v2 ([ARCHITECTURE](ARCHITECTURE.md) §8).
+  - **Photos in First modules is undecided.** The current lean is that "Photos" is simply the Immich connector: a nav link plus SSO. No Atlas gallery would duplicate Immich. The final call comes at the start of First modules ([ARCHITECTURE](ARCHITECTURE.md) §8).
 - **lift** (FastAPI/React/SQLite tasks, habits and journal) is later ported into an Atlas module. Its data moves to Atlas's PostgreSQL.
-- **Hermes AI agent**: undecided. v1 only leaves a hook: the event outbox plus the design for scoped service tokens ([ARCHITECTURE](ARCHITECTURE.md) §9).
+- **Hermes AI agent**: undecided. Foundation only leaves a hook: the event outbox plus the design for scoped service tokens ([ARCHITECTURE](ARCHITECTURE.md) §9).
 - **Multi-tenancy (several households on one instance)** is out of scope. The tenant prototype on the `origin/dev` branch is **dropped**, not carried forward.
 
-## v1 scope (the foundation)
+## Foundation scope
 
 1. **Identity.** Atlas ships with a bundled identity provider (an IdP: Kanidm, inside the default compose stack), so installing it stays one command. Operators who already run an OIDC provider can bring their own instead ([ADR-001](adr/001-identity.md)). Immich can use the same login. 2FA (TOTP or passkey) is required for owner/admin. Atlas keeps server-side sessions, so it can revoke them.
 2. **Users and family roles.** The roles above. Accounts can be created, disabled, given an expiry date (guests) and reset by an admin.
-3. **Permissions.** Roles grant per-module permissions, and per-object ownership/sharing is designed for v2 ([ADR-002](adr/002-authorization.md)). Every check is enforced in one layer that routes cannot bypass.
+3. **Permissions.** Roles grant per-module permissions, and per-object ownership/sharing is designed for First modules ([ADR-002](adr/002-authorization.md)). Every check is enforced in one layer that routes cannot bypass.
 4. **Admin console.** Manage users, roles, module enablement, connectors, active sessions and the audit log. Sensitive actions require step-up re-authentication.
 5. **Module registry.** Modules declare their routes, permissions, nav entries and migrations in a manifest. Admins enable or disable modules, and each person sees only the modules they may use.
 6. **Connectors.** A connector is a typed, admin-managed link to an external service. Immich is the first one: health, nav link and SSO.
@@ -62,24 +64,24 @@ v3+                 lift (tasks, habits, journal) as a module · Nextcloud-repla
 
 **Never run `docker compose down -v`.** The design protects data even if you do, but don't ([ADR-005](adr/005-database-and-migrations.md)).
 
-## Explicit non-goals for v1
+## Explicit non-goals for Foundation
 
-| Not in v1 | Why / where it goes |
+| Not in Foundation | Why / where it goes |
 |---|---|
-| Drive, Photos, file upload/download in the new platform | The existing code stays as it is (apart from the Phase 0 security patches) and becomes the first modules in v2 |
+| Drive, Photos, file upload/download in the new platform | The existing code stays as it is (apart from the Phase 0 security patches) and becomes the first modules (First modules milestone) |
 | Provisioning VMs, containers, DNS, tunnels or certificates from the admin console | Infrastructure belongs to the operator's own tooling. The console manages **Atlas** users, roles, modules and connectors only |
 | Writing our own password/TOTP/passkey/OIDC-provider stack | Atlas relies on a proven IdP ([ADR-001](adr/001-identity.md)) |
 | Required email (password reset mail, notifications) | Many homes have no mail server. Admins issue reset links instead |
 | Public self-registration | Accounts are created only by admins |
 | Multiple households / multi-tenancy | One household per instance. The `origin/dev` tenant model is dropped |
 | Re-implementing photo management | Immich does that, and Atlas connects to it |
-| Feature parity with Nextcloud (sync clients, WebDAV, calendar, contacts) | Considered module by module after v2 |
+| Feature parity with Nextcloud (sync clients, WebDAV, calendar, contacts) | Considered module by module after First modules |
 | Hermes AI agent features | Undecided. Only an integration hook exists |
 | Native mobile apps | Responsive web/PWA. Immich keeps its own mobile app (with SSO) |
 | Third-party or runtime-loaded plugins | Modules are first-party code in this repo, compiled in and enabled by config |
 | High availability, clustering | Single host. Backups and a tested restore cover recovery |
 
-## What "done" looks like for v1
+## What "done" looks like for Foundation
 
 On a fresh Linux host, an operator clones the repo, sets two public URLs and runs one command. They then have:
 
