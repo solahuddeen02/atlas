@@ -47,6 +47,18 @@ Atlas is public and meant to be self-hosted by others. Configuration has to:
 - `atlas-init` creates any **missing** secret using a cryptographic RNG. It **never overwrites an existing file**, and is idempotent.
 - It creates directories with mode `0700` and files with mode `0600`.
 - Operators who want to supply their own values (e.g. from a password manager or their own secrets tooling) just create the files first, and `atlas-init` leaves them alone.
+- **Ownership (amended in Phase 3b).** In Compose, `atlas-init` is the **only service that runs as root**. It's a one-shot with no network, and it uses root only to set ownership on what it writes (`atlas-admin init --chown`), so each container can read exactly its own secrets:
+
+  | Path | Owner : group | Mode | Read by |
+  |---|---|---|---|
+  | `atlas/` and its files | 10001 : 10001 (the Atlas image's user) | 0700 / 0600 | `atlas-api`, `atlas-migrate`, `atlas-db-init` |
+  | `postgres/` / `postgres/password` | 999 (the Postgres image's user) : 10001 | 0750 / 0640 | `postgres`, and `atlas-db-init` through the group |
+  | the backups dir | 10001 : 10001 | 0700 | `atlas-migrate`, `atlas-backup` |
+
+  - The group read on `postgres/` exists for `atlas-db-init`, the one step that needs the superuser password ([ADR-005](005-database-and-migrations.md) §3).
+  - Least privilege is enforced by **mounts**: `atlas-api` mounts only `atlas/`, so it can't read the Postgres password even though it runs as uid 10001.
+  - The uids are flags (`--app-uid`, `--app-gid`, `--postgres-uid`). Without `--chown`, for example when run by hand on the host, `init` never changes an owner.
+  - `--chown` sets owner and mode on existing files too. It never changes their contents.
 
 | Path under `ATLAS_SECRETS_DIR` | Contents (generated if missing) | Mounted read-only into |
 |---|---|---|
