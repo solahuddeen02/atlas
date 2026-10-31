@@ -207,6 +207,14 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
 ## Phase 4: Deploy skeleton (one-command install)
 
+> **Progress (IdP-agnostic part):**
+> - **Delivered:** `atlas-proxy`, `/health/ready`, multi-stage multi-arch images and `install.sh`, tested in the `compose` and `image` CI jobs.
+> - **Owner decisions** (recorded in ADR-003 §1):
+>   - `/health` answers on any `Host`;
+>   - the Docker gateway is trusted only for a loopback bind; any other bind requires `ATLAS_TRUSTED_PROXY_CIDRS`.
+> - **Deferred until Spike S** (`TODO(spike-s)`): the bundled Kanidm service (`bundled-idp` profile), its volume, its virtual host and internal-TLS re-encryption, and creating the IdP volume in `install.sh`.
+> - **Later phases:** the app reading `X-Real-IP` for app-level rate limits (Phase 5); the real SPA (Phase 7); publishing images (Phase 10).
+
 **Work:**
 - `atlas-proxy` (nginx) publishes only `${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`.
 - Vhosts are generated from `ATLAS_PUBLIC_URL` and `ATLAS_IDP_PUBLIC_URL`. Unknown `Host` → 444.

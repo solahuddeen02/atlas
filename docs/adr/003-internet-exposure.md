@@ -57,12 +57,18 @@ Immich: its own stack and hostname. Uses OIDC against the IdP's public URL. Atla
 
 **Client IP trust:**
 - The bundled proxy takes the client IP from `ATLAS_REAL_IP_HEADER`: `CF-Connecting-IP` for option 1, `X-Forwarded-For` (rightmost trusted hop) for options 2 and 3.
-- It trusts that header **only** from peers in `ATLAS_TRUSTED_PROXY_CIDRS` (default: loopback and the compose network gateway).
+- It trusts that header **only** from trusted peers (amended in Phase 4, owner decision):
+  - **Loopback is always trusted.**
+  - **The Docker bridge gateway is trusted only when `ATLAS_BIND_ADDRESS` is loopback.** With Docker's userland proxy, every connection to a published port arrives from the bridge gateway. On a loopback bind, only something on the host itself (the tunnel connector or your reverse proxy) can reach the port, so trusting the gateway is safe. The proxy detects the gateway at startup.
+  - **For any non-loopback bind, the gateway is never trusted implicitly.** The operator must set `ATLAS_TRUSTED_PROXY_CIDRS` explicitly, and **the proxy refuses to start**, with a message naming the setting, if it's empty. Trusting the gateway there would let anyone who can reach the port forge their client IP, and with it the rate-limit key and the audit log's address.
+  - `ATLAS_TRUSTED_PROXY_CIDRS` adds to these, and is the only source of trust on a non-loopback bind.
+  - Trust decisions (the real-IP header, `/health/ready`) use the TCP peer, never a forwarded address.
 - It forwards a single, overwritten `X-Real-IP` to the app.
 - The app trusts forwarded headers only from the bundled proxy.
 
 **Host allow-list:**
 - The proxy serves only the hostnames of `ATLAS_PUBLIC_URL` and `ATLAS_IDP_PUBLIC_URL`. Any other `Host` gets a 444.
+- **Exception (Phase 4, owner decision):** `/health` answers on any `Host`. A loopback check such as `curl http://127.0.0.1:8080/health` sends `Host: 127.0.0.1`, and the body is exactly `{"status":"ok"}`, so it reveals nothing. `/health/ready` is only for trusted peers.
 - Hostnames live in the operator's untracked `.env`, never in the repo.
 
 **Docs:**
