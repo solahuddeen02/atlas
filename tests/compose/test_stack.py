@@ -1,5 +1,7 @@
 """Compose acceptance tests for Phase 3 (PLAN-v1; ADR-004 §3, ADR-005 §3, §4).
 
+The proxy (Phase 4) has its own file, test_proxy.py.
+
 Run by the `compose` CI job (RUN_COMPOSE_TESTS=1). Each test builds its own
 throwaway stack; see tests/compose/stack.py.
 """
@@ -12,7 +14,6 @@ from tests.compose.stack import (
     COMPOSE_FILE,
     DEPLOY,
     FAILING_MIGRATION_OVERLAY,
-    TEST_OVERLAY,
     Stack,
     run,
 )
@@ -42,19 +43,10 @@ def test_stack_comes_up_healthy(make_stack: MakeStack) -> None:
     stack.up()
     stack.wait_healthy()
     assert stack.get("/health") == (200, b'{"status":"ok"}')
-    # Production mode: no interactive docs.
+    # Production mode: no interactive docs (through the proxy).
     assert stack.get("/docs")[0] == 404
     assert stack.get("/openapi.json")[0] == 404
     assert stack.psql("SELECT id FROM kernel.modules") == "kernel"
-
-
-def test_only_the_test_overlay_publishes_a_port(make_stack: MakeStack) -> None:
-    stack = make_stack(overlays=[])
-    rendered = json.loads(stack.compose("config", "--format", "json").stdout)
-    published = {
-        name: svc["ports"] for name, svc in rendered["services"].items() if svc.get("ports")
-    }
-    assert published == {}  # the proxy (Phase 4) will be the only one
 
 
 def test_secret_file_permissions(make_stack: MakeStack) -> None:
@@ -107,7 +99,7 @@ def test_down_v_preserves_data(make_stack: MakeStack) -> None:
 
 
 def test_failed_migration_blocks_api(make_stack: MakeStack, failing_migration_image: str) -> None:
-    stack = make_stack(overlays=[TEST_OVERLAY, FAILING_MIGRATION_OVERLAY])
+    stack = make_stack(overlays=[FAILING_MIGRATION_OVERLAY])
     result = stack.up(check=False)
     assert result.returncode != 0
     assert "atlas-migrate" in result.stderr + result.stdout

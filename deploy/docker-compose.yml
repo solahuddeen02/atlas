@@ -4,18 +4,19 @@
 # │ rely on that: stop the stack with `docker compose down` (no -v).         │
 # └──────────────────────────────────────────────────────────────────────────┘
 #
-# Atlas v1 stack (Phase 3b): secrets → Postgres → roles → migrations → API.
-# The reverse proxy, the only service that will publish a port, arrives in Phase 4.
+# Atlas v1 stack: secrets → Postgres → roles → migrations → API → proxy.
+# atlas-proxy is the only service that publishes a port, on loopback by default
+# (ADR-003 §1). Put a tunnel or your own TLS proxy in front of it.
 # Settings come from deploy/.env (template: .env.example); secrets are generated
 # by atlas-init under ${ATLAS_SECRETS_DIR} (ADR-004). Nothing secret is in this file.
 #
 # First start:
 #   cp .env.example .env            # then set ATLAS_PUBLIC_URL
-#   docker volume create atlas_pgdata
-#   docker compose up -d
+#   ./install.sh                    # creates the external volume, then `up -d`
 #
-# TODO(spike-s): the bundled IdP service (`idp`, profile bundled-idp) and its
-# external volume ${ATLAS_IDP_VOLUME}.
+# TODO(spike-s): the bundled IdP service (`idp`, profile bundled-idp, on by
+# default), its external volume ${ATLAS_IDP_VOLUME}, and its virtual host in
+# atlas-proxy. Without it, this is the bring-your-own-OIDC setup.
 
 name: atlas
 
@@ -99,7 +100,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    # No published port: only the proxy (Phase 4) will publish one.
+    # No published port: only atlas-proxy publishes one.
     environment:
       <<: *tz
       ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
@@ -118,6 +119,42 @@ services:
     depends_on:
       atlas-migrate:
         condition: service_completed_successfully
+
+  atlas-proxy:
+    # nginxinc/nginx-unprivileged:1.30.6-alpine, pinned by digest. Runs as uid 101.
+    image: nginxinc/nginx-unprivileged@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+    restart: unless-stopped
+    read_only: true
+    # Owned by nginx-unprivileged's uid/gid 101: the startup script renders its
+    # config into conf.d and nginx keeps its pid and temp files in /tmp.
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=0700
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0700
+    ports:
+      - "${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}:8080"
+    environment:
+      <<: *tz
+      ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
+      # The proxy needs the bind address to decide whether the Docker gateway is
+      # trusted (only for a loopback bind; ADR-003 §1).
+      ATLAS_BIND_ADDRESS: ${ATLAS_BIND_ADDRESS:-127.0.0.1}
+      ATLAS_HTTP_PORT: ${ATLAS_HTTP_PORT:-8080}
+      ATLAS_TRUSTED_PROXY_CIDRS: ${ATLAS_TRUSTED_PROXY_CIDRS:-}
+      ATLAS_REAL_IP_HEADER: ${ATLAS_REAL_IP_HEADER:-X-Forwarded-For}
+      ATLAS_MAX_BODY_SIZE: ${ATLAS_MAX_BODY_SIZE:-10m}
+      ATLAS_RATE_LIMIT_AUTH: ${ATLAS_RATE_LIMIT_AUTH:-10r/m}
+      ATLAS_RATE_LIMIT_API: ${ATLAS_RATE_LIMIT_API:-20r/s}
+    volumes:
+      - ./nginx/40-atlas-render.sh:/docker-entrypoint.d/40-atlas-render.sh:ro
+      - ./nginx/html:/usr/share/atlas/web:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      atlas-api:
+        condition: service_healthy
 
   # docker compose run --rm atlas-backup
   # docker compose run --rm atlas-backup atlas-admin restore --from /var/backups/atlas/<dir> --yes

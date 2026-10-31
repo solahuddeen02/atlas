@@ -55,7 +55,7 @@ Edit `.env` and set at least `ATLAS_PUBLIC_URL` and `ATLAS_IDP_PUBLIC_URL` to yo
 ./install.sh
 ```
 
-`install.sh` does two things. It creates the external volumes if they're missing (`docker volume create atlas_pgdata`, and `atlas_idp` unless you use your own IdP). Then it runs `docker compose up -d`. If you'd rather do it by hand, run those commands yourself. On every later start, `docker compose up -d` alone is enough.
+`deploy/install.sh` does two things. It creates the external volumes if they're missing (`docker volume create atlas_pgdata`; `atlas_idp` follows once the bundled IdP lands). Then it runs `docker compose up -d`. If you'd rather do it by hand, run those commands yourself. On every later start, `docker compose up -d` alone is enough.
 
 On first start, `atlas-init`:
 - generates every secret into `./secrets/` (`0700` dir, `0600` files) and never overwrites existing files;
@@ -104,9 +104,10 @@ Atlas **refuses to start** on unsafe configuration: a weak or placeholder `SECRE
 | `ATLAS_IDP_VOLUME` | `atlas_idp` | Name of the **external** Docker volume holding the bundled IdP's data |
 | `ATLAS_IMAGE_TAG` | the release you checked out | Atlas image tag. Pin it, and change it only when [upgrading](#upgrading) |
 | `ATLAS_REAL_IP_HEADER` | `X-Forwarded-For` | Header carrying the client IP from the component in front. Set `CF-Connecting-IP` when using the Cloudflare Tunnel |
-| `ATLAS_TRUSTED_PROXY_CIDRS` | loopback + the compose network | Peers allowed to set `ATLAS_REAL_IP_HEADER`. Add your reverse proxy's address if it runs on another machine |
+| `ATLAS_TRUSTED_PROXY_CIDRS` | *(empty)* | Extra peers allowed to set `ATLAS_REAL_IP_HEADER` (comma-separated IPs/CIDRs). Loopback is always trusted, and with a **loopback** `ATLAS_BIND_ADDRESS` so is the Docker gateway. With **any other bind this is required**, and the proxy refuses to start without it: Docker's userland proxy makes every connection arrive from the gateway, so it isn't trusted implicitly ([ADR-003](adr/003-internet-exposure.md) §1) |
 | `ATLAS_MAX_BODY_SIZE` | `10m` | Max request body at the proxy (raised by file modules in v2) |
 | `ATLAS_RATE_LIMIT_AUTH` | `10r/m` | Proxy rate limit per client IP for authentication endpoints |
+| `ATLAS_RATE_LIMIT_API` | `20r/s` | Proxy rate limit per client IP for the rest of `/api/` |
 | `ATLAS_BACKUP_KEEP_DAILY` | `7` | Daily backups kept by `atlas-backup` |
 | `ATLAS_BACKUP_KEEP_WEEKLY` | `4` | Weekly backups kept by `atlas-backup` |
 

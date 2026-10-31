@@ -75,7 +75,8 @@ Every job in `.github/workflows/ci.yml` must be green before a PR merges.
 | `web` | The frontend builds from `package-lock.json` (lint is informational while it's the legacy frontend) | `cd legacy/frontend && npm ci && npm run lint && npm run build` |
 | `gitleaks` | No secrets in the commits being pushed. A weekly workflow (`gitleaks-weekly`) scans the full history | `gitleaks git --redact .` |
 | `audit` | No known vulnerabilities in `uv.lock` or the frontend's runtime deps (`legacy/requirements.txt` is reported, not enforced) | `uv export --all-groups --no-emit-project --format requirements-txt -o /tmp/req.txt && uv run pip-audit --strict --require-hashes --disable-pip -r /tmp/req.txt`, `cd legacy/frontend && npm audit --omit=dev` |
-| `compose` | The image builds, runs as non-root and has the PG 17 client; the compose stack comes up healthy; `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
+| `image` | The image builds for linux/amd64 and linux/arm64; it runs as non-root, has the PG 17 client, and contains no source tree, VCS data, tests, env files or `uv` | `docker buildx build --platform linux/amd64,linux/arm64 .` |
+| `compose` | The compose stack comes up healthy; the proxy (single published port, unknown `Host` dropped, real-IP trust, headers, rate and body limits, refusal on bad settings); `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
 | `compose-lint` | No literal secret values in any compose file's `environment:` ([ADR-004 §3](docs/adr/004-config-and-secrets.md)) | `uv run python scripts/ci/lint_compose_secrets.py` |
 
 ### Rules that the linters enforce
