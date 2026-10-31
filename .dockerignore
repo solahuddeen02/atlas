@@ -13,11 +13,12 @@
 .env.*
 *.env
 !.env.example
-secrets/
-backups/
+**/secrets/
+**/backups/
 tests/
 legacy/
 docs/
+deploy/
 *.db
 *.db-shm
 *.db-wal

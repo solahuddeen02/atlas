@@ -189,6 +189,8 @@ Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_S
 - `test_audit_log_append_only`
 - Compose: `test_down_v_preserves_data`, `test_failed_migration_blocks_api`, `test_backup_restore_roundtrip`.
 
+**Progress:** 3a merged (#19). 3b adds the compose stack and the `compose` CI job. Secret ownership in Compose is set by `atlas-init --chown` (ADR-004 §3).
+
 **Delivered in two PRs** (owner-approved):
 - **3a, DB core:** `atlas.kernel.db`, the baseline, the roles and grants, and `db-init`/`migrate`/`backup`/`restore`. Tested against a real Postgres in the `backend` job.
 - **3b, compose:** a minimal image, `deploy/docker-compose.yml`, and the compose tests above in a new `compose` CI job.

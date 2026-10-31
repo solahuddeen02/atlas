@@ -1,0 +1,145 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ NEVER run `docker compose down -v`.                                      │
+# │ The database volume is external, so Compose can't delete it, but don't   │
+# │ rely on that: stop the stack with `docker compose down` (no -v).         │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# Atlas v1 stack (Phase 3b): secrets → Postgres → roles → migrations → API.
+# The reverse proxy, the only service that will publish a port, arrives in Phase 4.
+# Settings come from deploy/.env (template: .env.example); secrets are generated
+# by atlas-init under ${ATLAS_SECRETS_DIR} (ADR-004). Nothing secret is in this file.
+#
+# First start:
+#   cp .env.example .env            # then set ATLAS_PUBLIC_URL
+#   docker volume create atlas_pgdata
+#   docker compose up -d
+#
+# TODO(spike-s): the bundled IdP service (`idp`, profile bundled-idp) and its
+# external volume ${ATLAS_IDP_VOLUME}.
+
+name: atlas
+
+x-atlas: &atlas
+  image: atlas:${ATLAS_IMAGE_TAG:-local}
+  build:
+    context: ..
+    dockerfile: Dockerfile
+
+x-tz: &tz
+  TZ: ${TZ:-UTC}
+
+services:
+  atlas-init:
+    <<: *atlas
+    # The only service that runs as root: it sets ownership on the secrets and
+    # backups it writes, so each container can read just its own (ADR-004 §3).
+    user: "0:0"
+    network_mode: none
+    command:
+      - atlas-admin
+      - init
+      - --secrets-dir=/secrets
+      - --backup-dir=/backups
+      - --chown
+    environment:
+      <<: *tz
+    volumes:
+      - ${ATLAS_SECRETS_DIR:-./secrets}:/secrets
+      - ${ATLAS_BACKUP_DIR:-./backups}:/backups
+
+  postgres:
+    # postgres:17, pinned by digest (ADR-005 §1).
+    image: postgres@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+    restart: unless-stopped
+    environment:
+      <<: *tz
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres/password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ${ATLAS_SECRETS_DIR:-./secrets}/postgres:/run/secrets/postgres:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      atlas-init:
+        condition: service_completed_successfully
+
+  atlas-db-init:
+    <<: *atlas
+    command: ["atlas-admin", "db-init"]
+    environment:
+      <<: *tz
+      ATLAS_ENV_FILES: /run/secrets/atlas/app.env
+      ATLAS_POSTGRES_PASSWORD_FILE: /run/secrets/postgres/password
+    volumes:
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
+      - ${ATLAS_SECRETS_DIR:-./secrets}/postgres:/run/secrets/postgres:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  atlas-migrate:
+    <<: *atlas
+    command: ["atlas-admin", "migrate"]
+    environment:
+      <<: *tz
+      ATLAS_ENV_FILES: /run/secrets/atlas/app.env
+    volumes:
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
+      - ${ATLAS_BACKUP_DIR:-./backups}:/var/backups/atlas
+    depends_on:
+      atlas-db-init:
+        condition: service_completed_successfully
+
+  atlas-api:
+    <<: *atlas
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    # No published port: only the proxy (Phase 4) will publish one.
+    environment:
+      <<: *tz
+      ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
+    volumes:
+      # Only the Atlas secrets. The API never sees the Postgres superuser password.
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      atlas-migrate:
+        condition: service_completed_successfully
+
+  # docker compose run --rm atlas-backup
+  # docker compose run --rm atlas-backup atlas-admin restore --from /var/backups/atlas/<dir> --yes
+  atlas-backup:
+    <<: *atlas
+    profiles: ["tools"]
+    command: ["atlas-admin", "backup"]
+    environment:
+      <<: *tz
+      ATLAS_ENV_FILES: /run/secrets/atlas/app.env
+      ATLAS_BACKUP_KEEP_DAILY: ${ATLAS_BACKUP_KEEP_DAILY:-7}
+      ATLAS_BACKUP_KEEP_WEEKLY: ${ATLAS_BACKUP_KEEP_WEEKLY:-4}
+    volumes:
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
+      - ${ATLAS_BACKUP_DIR:-./backups}:/var/backups/atlas
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    # External: Compose never creates or deletes it, so `down -v` can't remove the
+    # database (ADR-005 §4). Create it once: docker volume create atlas_pgdata
+    external: true
+    name: ${ATLAS_PGDATA_VOLUME:-atlas_pgdata}

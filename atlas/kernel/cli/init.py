@@ -52,7 +52,22 @@ APP_ENV_GENERATORS: dict[str, Callable[[], str]] = {
 # server certificate and key). Not generated until Spike S confirms the IdP.
 # The atlas_app/atlas_migrator roles are created from these passwords by
 # `atlas-admin db-init` (atlas.kernel.db.bootstrap) once Postgres is up.
-# TODO(phase-3b): file ownership so the postgres container's uid can read postgres/password.
+
+
+@dataclass(frozen=True)
+class Ownership:
+    """Who each secrets subdirectory belongs to inside the containers (ADR-004 §3).
+
+    - `atlas/` and the backups dir: the Atlas image's user (uid/gid 10001), 0700/0600.
+    - `postgres/`: the Postgres image's user (uid 999), with the Atlas group allowed to
+      read (0750/0640), because `atlas-db-init` runs as the Atlas user and needs the
+      superuser password. Containers only see the subdirectories they mount, so the
+      API, which never mounts `postgres/`, can't read it anyway.
+    """
+
+    app_uid: int = 10001
+    app_gid: int = 10001
+    postgres_uid: int = 999
 
 
 @dataclass
@@ -75,7 +90,9 @@ def _ensure_dir(path: Path, root: Path, report: InitReport) -> None:
     if path.exists():
         if not path.is_dir():
             raise InitError(f"{path} exists and is not a directory")
-        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        # Group read is deliberate for postgres/ (see Ownership); group write or any
+        # access for others is not.
+        if stat.S_IMODE(path.stat().st_mode) & 0o027:
             report.warnings.append(f"{label} is accessible by group/others; consider chmod 700")
         return
     path.mkdir(mode=DIR_MODE, parents=True)
@@ -151,7 +168,37 @@ CONNECTORS_ENV_HEADER = (
 )
 
 
-def run_init(secrets_dir: Path) -> InitReport:
+def _set_owner(path: Path, uid: int, gid: int, mode: int) -> None:
+    try:
+        os.chown(path, uid, gid)
+    except PermissionError:
+        raise InitError(f"cannot change the owner of {path}; --chown needs root") from None
+    os.chmod(path, mode)
+
+
+def _apply_ownership(root: Path, backup_dir: Path | None, owners: Ownership) -> None:
+    app = (owners.app_uid, owners.app_gid)
+    atlas_dir = root / "atlas"
+    _set_owner(atlas_dir, *app, DIR_MODE)
+    for child in atlas_dir.iterdir():
+        if child.is_file() and not child.name.startswith("."):
+            _set_owner(child, *app, FILE_MODE)
+
+    postgres_dir = root / "postgres"
+    _set_owner(postgres_dir, owners.postgres_uid, owners.app_gid, 0o750)
+    _set_owner(postgres_dir / "password", owners.postgres_uid, owners.app_gid, 0o640)
+
+    if backup_dir is not None:
+        _set_owner(backup_dir, *app, DIR_MODE)
+
+
+def run_init(
+    secrets_dir: Path,
+    *,
+    backup_dir: Path | None = None,
+    owners: Ownership | None = None,
+) -> InitReport:
+    """Generate missing secrets. With `owners`, also set the container ownership."""
     root = secrets_dir
     report = InitReport()
     _ensure_dir(root, root, report)
@@ -164,4 +211,11 @@ def run_init(secrets_dir: Path) -> InitReport:
     postgres_dir = root / "postgres"
     _ensure_dir(postgres_dir, root, report)
     _ensure_secret_file(postgres_dir / "password", root, report)
+
+    if backup_dir is not None and not backup_dir.exists():
+        backup_dir.mkdir(mode=DIR_MODE, parents=True)
+        os.chmod(backup_dir, DIR_MODE)
+        report.created.append(f"{backup_dir}/")
+    if owners is not None:
+        _apply_ownership(root, backup_dir, owners)
     return report

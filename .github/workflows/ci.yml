@@ -1,5 +1,5 @@
 # Job ids are the status-check names used in branch protection. Keep them stable:
-# backend, legacy, web, gitleaks, audit, compose-lint.
+# backend, legacy, web, gitleaks, audit, compose-lint, compose.
 name: CI
 
 on:
@@ -174,3 +174,37 @@ jobs:
           enable-cache: true
       - name: No literal secrets in compose files (ADR-004 §3)
         run: uv run --locked python scripts/ci/lint_compose_secrets.py
+
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUN_COMPOSE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install (from uv.lock)
+        run: uv sync --locked
+      - name: Build the Atlas image
+        run: docker build -t atlas:local .
+      - name: Image basics (non-root; no source tree, env files or uv; PG 17 client)
+        run: |
+          set -x
+          fail=0
+          uid="$(docker run --rm --entrypoint id atlas:local -u)"
+          [ "$uid" = "10001" ] || { echo "::error::image runs as uid $uid, expected 10001"; fail=1; }
+          leftovers="$(docker run --rm --entrypoint sh atlas:local -c \
+            'ls -d /opt/atlas/src /usr/local/bin/uv 2>/dev/null; find /opt/atlas -name "*.env" 2>/dev/null')"
+          [ -z "$leftovers" ] || { echo "::error::unexpected files in image: $leftovers"; fail=1; }
+          version="$(docker run --rm --entrypoint pg_dump atlas:local --version 2>&1)" || true
+          echo "pg_dump reports: $version"
+          case "$version" in
+            *" 17."*) ;;
+            *) echo "::error::pg_dump is not version 17: $version"; fail=1 ;;
+          esac
+          exit "$fail"
+      - name: Compose tests (ADR-004 §3, ADR-005 §3–4)
+        run: uv run pytest tests/compose -v -p no:cacheprovider

@@ -5,7 +5,7 @@ import pytest
 from dotenv import dotenv_values
 
 from atlas.kernel.cli import main
-from atlas.kernel.cli.init import run_init
+from atlas.kernel.cli.init import Ownership, run_init
 from atlas.kernel.config import build_settings
 from tests.conftest import VALID
 
@@ -187,3 +187,66 @@ def test_cli_reports_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     not_a_dir.write_text("")
     assert main(["init", "--secrets-dir", str(not_a_dir)]) == 1
     assert "is not a directory" in capsys.readouterr().err
+
+
+# --chown (ADR-004 §3): ownership for the containers. Tests chown to the current
+# user, which needs no root, so the same logic runs locally and in CI.
+
+
+def owners_self() -> Ownership:
+    import os
+
+    return Ownership(app_uid=os.getuid(), app_gid=os.getgid(), postgres_uid=os.getuid())
+
+
+def test_chown_sets_modes_and_owners(secrets_dir: Path, tmp_path: Path) -> None:
+    import os
+
+    backups = tmp_path / "backups"
+    run_init(secrets_dir, backup_dir=backups, owners=owners_self())
+    assert mode(secrets_dir / "atlas") == 0o700
+    for f in ("atlas/app.env", "atlas/connectors.env"):
+        assert mode(secrets_dir / f) == 0o600
+    # Group-readable so atlas-db-init (the Atlas group) can read the superuser password.
+    assert mode(secrets_dir / "postgres") == 0o750
+    assert mode(secrets_dir / "postgres/password") == 0o640
+    assert mode(backups) == 0o700
+    for path in (secrets_dir / "atlas/app.env", secrets_dir / "postgres/password", backups):
+        assert (path.stat().st_uid, path.stat().st_gid) == (os.getuid(), os.getgid())
+
+
+def test_chown_is_idempotent_and_quiet(secrets_dir: Path, tmp_path: Path) -> None:
+    run_init(secrets_dir, backup_dir=tmp_path / "b", owners=owners_self())
+    before = snapshot(secrets_dir)
+    report = run_init(secrets_dir, backup_dir=tmp_path / "b", owners=owners_self())
+    assert snapshot(secrets_dir) == before
+    assert report.warnings == []  # postgres/ at 0750 is expected, not a warning
+
+
+def test_chown_without_root_is_a_clear_error(secrets_dir: Path) -> None:
+    import os
+
+    from atlas.kernel.cli.init import InitError
+
+    if os.geteuid() == 0:
+        pytest.skip("running as root: chown to another uid succeeds")
+    with pytest.raises(InitError, match="--chown needs root"):
+        run_init(secrets_dir, owners=Ownership(app_uid=os.getuid() + 1))
+
+
+def test_without_chown_nothing_changes_owner(secrets_dir: Path, tmp_path: Path) -> None:
+    run_init(secrets_dir, backup_dir=tmp_path / "b")
+    assert mode(secrets_dir / "postgres/password") == 0o600
+    assert mode(tmp_path / "b") == 0o700
+
+
+def test_cli_chown_flags(
+    secrets_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    args = ["init", "--secrets-dir", str(secrets_dir), "--backup-dir", str(tmp_path / "b")]
+    args += ["--chown", "--app-uid", str(os.getuid()), "--app-gid", str(os.getgid())]
+    args += ["--postgres-uid", str(os.getuid())]
+    assert main(args) == 0
+    assert mode(secrets_dir / "postgres/password") == 0o640
