@@ -39,15 +39,21 @@ def pytest_runtest_makereport(
         item.stash[FAILED] = True
 
 
+# The watchdog writes here, because pytest captures stderr during a test. The
+# compose CI job prints this file in its diagnostics step.
+WATCHDOG_LOG = REPO_ROOT / "compose-watchdog.log"
+
+
 def _watchdog_fire(nodeid: str) -> None:
-    out = sys.__stderr__ or sys.stderr
-    out.write(f"\n\n!!!!! {nodeid} exceeded {TEST_LIMIT_SECONDS}s; aborting the run !!!!!\n")
-    for stack in list(ACTIVE):
-        out.write(stack.diagnostics() + "\n")
-    out.write("----- Python tracebacks -----\n")
-    out.flush()
-    faulthandler.dump_traceback(file=out, all_threads=True)
-    out.flush()
+    with WATCHDOG_LOG.open("a") as out:
+        out.write(f"!!!!! {nodeid} exceeded {TEST_LIMIT_SECONDS}s; aborting the run !!!!!\n")
+        out.flush()
+        for stack in list(ACTIVE):
+            out.write(stack.diagnostics() + "\n")
+            out.flush()
+        out.write("----- Python tracebacks -----\n")
+        out.flush()
+        faulthandler.dump_traceback(file=out, all_threads=True)
     os._exit(3)
 
 
@@ -56,9 +62,14 @@ def compose_watchdog(request: pytest.FixtureRequest) -> Iterator[None]:
     timer = threading.Timer(TEST_LIMIT_SECONDS, _watchdog_fire, args=(request.node.nodeid,))
     timer.daemon = True
     timer.start()
+    # Backstop in C: exits even if the Python watchdog (or its diagnostics) is stuck.
+    backstop = WATCHDOG_LOG.open("a")
+    faulthandler.dump_traceback_later(TEST_LIMIT_SECONDS + 180, exit=True, file=backstop)
     try:
         yield
     finally:
+        faulthandler.cancel_dump_traceback_later()
+        backstop.close()
         timer.cancel()
 
 

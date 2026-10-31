@@ -107,8 +107,9 @@ class Stack:
         )
         # The API needs OIDC settings that atlas-init doesn't generate (Phase 5 /
         # TODO(spike-s)). Put them in app.env first; init only appends missing keys.
+        self.secrets_dir.mkdir(mode=0o700)
         atlas_dir = self.secrets_dir / "atlas"
-        atlas_dir.mkdir(parents=True, mode=0o700)
+        atlas_dir.mkdir(mode=0o700)
         (atlas_dir / "app.env").write_text(
             "ATLAS_OIDC_ISSUER=https://id.test.invalid\n"
             f"ATLAS_OIDC_CLIENT_SECRET={secrets.token_urlsafe(24)}\n"
@@ -170,9 +171,14 @@ class Stack:
             healthy = {s.get("Service") for s in last if s.get("Health") == "healthy"}
             if {"atlas-api", "atlas-proxy"} <= healthy:
                 return
-            failed = [s for s in last if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
-            if failed:
-                self.fail(f"a service exited with an error: {[s.get('Service') for s in failed]}")
+            exited = [s for s in last if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
+            if exited:
+                self.fail(f"a service exited with an error: {[s.get('Service') for s in exited]}")
+            # `restart: unless-stopped` turns a failing start into a crash loop, which
+            # never becomes healthy and never reads as exited: fail now, not at the limit.
+            looping = [s for s in last if s.get("State") == "restarting"]
+            if looping:
+                self.fail(f"a service is crash-looping: {[s.get('Service') for s in looping]}")
             time.sleep(2)
         summary = {
             str(s.get("Service")): f"{s.get('State')}/{s.get('Health') or '-'}" for s in last

@@ -197,10 +197,12 @@ jobs:
         env:
           # Live output: without it, pytest's progress sits in a pipe buffer.
           PYTHONUNBUFFERED: "1"
-        run: uv run pytest tests/compose -v -ra --durations=0 -p no:cacheprovider
+        # -vv: pyproject's addopts has -q, which cancels a single -v (one line per file).
+        run: uv run pytest tests/compose -vv -ra --durations=0 -p no:cacheprovider
       - name: Leftover containers (diagnostics)
         if: failure() || cancelled()
         run: |
+          if [ -s compose-watchdog.log ]; then echo "===== compose-watchdog.log"; cat compose-watchdog.log; fi
           docker ps --all
           for c in $(docker ps --all --quiet); do
             echo "===== $(docker inspect --format '{{.Name}} {{.State.Status}} exit={{.State.ExitCode}}' "$c")"

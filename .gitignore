@@ -34,3 +34,6 @@ backups/
 .pytest_cache/
 node_modules/
 .import_linter_cache/
+
+# Written by the compose tests' watchdog (tests/compose/conftest.py).
+compose-watchdog.log
