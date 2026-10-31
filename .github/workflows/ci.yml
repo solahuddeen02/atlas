@@ -191,7 +191,21 @@ jobs:
       - name: Build the Atlas image
         run: docker build -t atlas:local .
       - name: Compose tests (ADR-003, ADR-004 §3, ADR-005 §3–4)
-        run: uv run pytest tests/compose -v -p no:cacheprovider
+        # Below the job limit, so the diagnostics step below still runs. Each test also
+        # has its own 480 s watchdog (tests/compose/conftest.py).
+        timeout-minutes: 25
+        env:
+          # Live output: without it, pytest's progress sits in a pipe buffer.
+          PYTHONUNBUFFERED: "1"
+        run: uv run pytest tests/compose -v -ra --durations=0 -p no:cacheprovider
+      - name: Leftover containers (diagnostics)
+        if: failure() || cancelled()
+        run: |
+          docker ps --all
+          for c in $(docker ps --all --quiet); do
+            echo "===== $(docker inspect --format '{{.Name}} {{.State.Status}} exit={{.State.ExitCode}}' "$c")"
+            docker logs --tail 150 "$c" 2>&1 || true
+          done
 
   image:
     name: image

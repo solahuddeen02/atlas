@@ -6,6 +6,7 @@ external Postgres volume, so tests never touch each other or a real deployment.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import secrets
@@ -22,11 +23,42 @@ FAILING_MIGRATION_OVERLAY = DEPLOY / "compose.test-failing-migration.yml"
 IMAGE = "atlas:local"
 PUBLIC_HOST = "atlas.test.invalid"
 
+# Every wait is bounded. A hit limit fails the test with a clear message and the
+# stack's state and logs (Stack.diagnostics), instead of hanging the CI job.
+COMMAND_TIMEOUT = 90  # one docker/compose command
+UP_TIMEOUT = 240  # `up -d` blocks until dependencies are healthy
+DOWN_TIMEOUT = 240
+HEALTHY_TIMEOUT = 180  # whole stack healthy after `up`
+LOG_TIMEOUT = 90  # a service logging an expected line
+DIAGNOSTIC_SERVICES = (
+    "atlas-proxy",
+    "atlas-api",
+    "atlas-migrate",
+    "atlas-db-init",
+    "atlas-init",
+    "postgres",
+)
+
+# Stacks alive right now, for the per-test watchdog (tests/compose/conftest.py).
+ACTIVE: list[Stack] = []
+
+
+class HarnessTimeout(AssertionError):
+    pass
+
 
 def run(
-    args: list[str], *, check: bool = True, timeout: int = 600
+    args: list[str], *, check: bool = True, timeout: int = COMMAND_TIMEOUT
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raw = exc.stdout or ""
+        out = raw if isinstance(raw, str) else raw.decode(errors="replace")
+        raise HarnessTimeout(
+            f"`{' '.join(args)}` did not finish within {timeout}s\n"
+            f"--- partial output ---\n{out[-2000:]}"
+        ) from None
     if check and result.returncode != 0:
         raise AssertionError(
             f"{' '.join(args)} exited {result.returncode}\n"
@@ -51,6 +83,7 @@ class Stack:
     port: int = field(default_factory=free_port)
 
     def __post_init__(self) -> None:
+        ACTIVE.append(self)
         self.secrets_dir = self.workdir / "secrets"
         self.backup_dir = self.workdir / "backups"
         self.volume = f"{self.project}_pgdata"
@@ -84,7 +117,7 @@ class Stack:
             run(["docker", "volume", "create", self.volume])
 
     def compose(
-        self, *args: str, check: bool = True, timeout: int = 600
+        self, *args: str, check: bool = True, timeout: int = COMMAND_TIMEOUT
     ) -> subprocess.CompletedProcess[str]:
         cmd = ["docker", "compose", "-p", self.project, "--env-file", str(self.env_file)]
         cmd += ["-f", str(COMPOSE_FILE)]
@@ -92,26 +125,61 @@ class Stack:
             cmd += ["-f", str(overlay)]
         return run([*cmd, *args], check=check, timeout=timeout)
 
-    def up(self, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return self.compose("up", "-d", "--no-build", check=check)
+    def diagnostics(self) -> str:
+        """`compose ps` and recent logs of every service. Never raises."""
+        parts = [f"===== diagnostics for compose project {self.project} ====="]
 
-    def wait_healthy(self, timeout: float = 240) -> None:
+        def section(title: str, *args: str) -> None:
+            try:
+                result = self.compose(*args, check=False, timeout=60)
+                body = (result.stdout + result.stderr).strip() or "(no output)"
+            except Exception as exc:
+                body = f"(could not collect: {exc})"
+            parts.append(f"----- {title} -----\n{body[-6000:]}")
+
+        section("docker compose ps --all", "ps", "--all")
+        for service in DIAGNOSTIC_SERVICES:
+            section(f"logs {service}", "logs", "--no-color", "--tail", "120", service)
+        return "\n".join(parts)
+
+    def fail(self, message: str) -> None:
+        raise AssertionError(f"{message}\n{self.diagnostics()}")
+
+    def up(self, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        try:
+            result = self.compose("up", "-d", "--no-build", check=False, timeout=UP_TIMEOUT)
+        except HarnessTimeout as exc:
+            self.fail(f"`docker compose up` did not return: {exc}")
+            raise  # unreachable; fail() raises
+        if check and result.returncode != 0:
+            self.fail(
+                f"`docker compose up` exited {result.returncode}\n"
+                f"{(result.stdout + result.stderr)[-4000:]}"
+            )
+        return result
+
+    def states(self) -> list[dict[str, object]]:
+        result = self.compose("ps", "--all", "--format", "json", check=False)
+        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+    def wait_healthy(self, timeout: float = HEALTHY_TIMEOUT) -> None:
         deadline = time.monotonic() + timeout
-        last = ""
+        last: list[dict[str, object]] = []
         while time.monotonic() < deadline:
-            result = self.compose("ps", "--all", "--format", "json", check=False)
-            states = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-            healthy = {s.get("Service") for s in states if s.get("Health") == "healthy"}
+            last = self.states()
+            healthy = {s.get("Service") for s in last if s.get("Health") == "healthy"}
             if {"atlas-api", "atlas-proxy"} <= healthy:
                 return
-            failed = [s for s in states if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
+            failed = [s for s in last if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
             if failed:
-                raise AssertionError(f"a service failed: {failed}\n{self.logs()}")
-            last = json.dumps(states)[-2000:]
+                self.fail(f"a service exited with an error: {[s.get('Service') for s in failed]}")
             time.sleep(2)
-        raise AssertionError(f"stack not healthy after {timeout}s: {last}\n{self.logs()}")
+        summary = {
+            str(s.get("Service")): f"{s.get('State')}/{s.get('Health') or '-'}" for s in last
+        }
+        self.fail(f"stack not healthy within {timeout}s (state/health: {summary})")
 
-    def wait_for_log(self, service: str, text: str, timeout: float = 120) -> str:
+    def wait_for_log(self, service: str, text: str, timeout: float = LOG_TIMEOUT) -> str:
         """Wait until `service` has logged `text` (e.g. a refusal to start)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -119,7 +187,8 @@ class Stack:
             if text in logs:
                 return logs
             time.sleep(2)
-        raise AssertionError(f"{service} never logged {text!r}:\n{self.logs()}")
+        self.fail(f"{service} did not log {text!r} within {timeout}s")
+        return ""  # unreachable
 
     def port_unreachable(self) -> bool:
         try:
@@ -216,27 +285,42 @@ class Stack:
         return result.stdout.strip()
 
     def destroy(self) -> None:
-        self.compose("--profile", "tools", "down", "--remove-orphans", check=False)
-        run(["docker", "volume", "rm", "-f", self.volume], check=False)
-        # Files under secrets/ and backups/ belong to container uids now; remove
-        # them as root inside a container so pytest's tmp cleanup doesn't fail.
-        run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--user",
-                "0:0",
-                "--network",
-                "none",
-                "--entrypoint",
-                "rm",
-                "-v",
-                f"{self.workdir}:/w",
-                IMAGE,
-                "-rf",
-                "/w/secrets",
-                "/w/backups",
-            ],
-            check=False,
-        )
+        # Best effort and bounded: cleanup must never hang the job either.
+        if self in ACTIVE:
+            ACTIVE.remove(self)
+        with contextlib.suppress(HarnessTimeout):
+            self.compose(
+                "--profile",
+                "tools",
+                "down",
+                "--remove-orphans",
+                "--timeout",
+                "5",
+                check=False,
+                timeout=DOWN_TIMEOUT,
+            )
+        with contextlib.suppress(HarnessTimeout):
+            run(["docker", "volume", "rm", "-f", self.volume], check=False)
+        # Files under secrets/ and backups/ belong to container uids now; remove them
+        # as root inside a container so pytest's tmp cleanup doesn't fail.
+        with contextlib.suppress(HarnessTimeout):
+            run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    "0:0",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "rm",
+                    "-v",
+                    f"{self.workdir}:/w",
+                    IMAGE,
+                    "-rf",
+                    "/w/secrets",
+                    "/w/backups",
+                ],
+                check=False,
+            )
