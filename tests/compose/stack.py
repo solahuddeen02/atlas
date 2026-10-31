@@ -6,21 +6,21 @@ external Postgres volume, so tests never touch each other or a real deployment.
 
 from __future__ import annotations
 
+import http.client
 import json
 import secrets
 import socket
 import subprocess
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = REPO_ROOT / "deploy"
 COMPOSE_FILE = DEPLOY / "docker-compose.yml"
-TEST_OVERLAY = DEPLOY / "compose.test.yml"
 FAILING_MIGRATION_OVERLAY = DEPLOY / "compose.test-failing-migration.yml"
 IMAGE = "atlas:local"
+PUBLIC_HOST = "atlas.test.invalid"
 
 
 def run(
@@ -45,7 +45,8 @@ def free_port() -> int:
 class Stack:
     workdir: Path
     project: str = field(default_factory=lambda: f"atlastest{secrets.token_hex(4)}")
-    overlays: list[Path] = field(default_factory=lambda: [TEST_OVERLAY])
+    overlays: list[Path] = field(default_factory=list)
+    extra_env: dict[str, str] = field(default_factory=dict)
     create_volume: bool = True
     port: int = field(default_factory=free_port)
 
@@ -57,13 +58,16 @@ class Stack:
         self.env_file.write_text(
             "\n".join(
                 [
-                    "ATLAS_PUBLIC_URL=https://atlas.test.invalid",
+                    f"ATLAS_PUBLIC_URL=https://{PUBLIC_HOST}",
                     f"ATLAS_SECRETS_DIR={self.secrets_dir}",
                     f"ATLAS_BACKUP_DIR={self.backup_dir}",
                     f"ATLAS_PGDATA_VOLUME={self.volume}",
                     "ATLAS_IMAGE_TAG=local",
-                    f"ATLAS_TEST_API_PORT={self.port}",
+                    # The proxy is the only published port; tests reach it on loopback.
+                    "ATLAS_BIND_ADDRESS=127.0.0.1",
+                    f"ATLAS_HTTP_PORT={self.port}",
                     "TZ=UTC",
+                    *(f"{k}={v}" for k, v in self.extra_env.items()),
                 ]
             )
             + "\n"
@@ -97,26 +101,100 @@ class Stack:
         while time.monotonic() < deadline:
             result = self.compose("ps", "--all", "--format", "json", check=False)
             states = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-            api = [s for s in states if s.get("Service") == "atlas-api"]
-            if api and api[0].get("Health") == "healthy":
+            healthy = {s.get("Service") for s in states if s.get("Health") == "healthy"}
+            if {"atlas-api", "atlas-proxy"} <= healthy:
                 return
             failed = [s for s in states if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
             if failed:
                 raise AssertionError(f"a service failed: {failed}\n{self.logs()}")
             last = json.dumps(states)[-2000:]
             time.sleep(2)
-        raise AssertionError(f"atlas-api not healthy after {timeout}s: {last}\n{self.logs()}")
+        raise AssertionError(f"stack not healthy after {timeout}s: {last}\n{self.logs()}")
+
+    def wait_for_log(self, service: str, text: str, timeout: float = 120) -> str:
+        """Wait until `service` has logged `text` (e.g. a refusal to start)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            logs = self.logs(service)
+            if text in logs:
+                return logs
+            time.sleep(2)
+        raise AssertionError(f"{service} never logged {text!r}:\n{self.logs()}")
+
+    def port_unreachable(self) -> bool:
+        try:
+            self.request("/health")
+        except (ConnectionError, http.client.HTTPException, OSError):
+            return True
+        return False
 
     def logs(self, *services: str) -> str:
         result = self.compose("logs", "--no-color", *services, check=False)
         return (result.stdout + result.stderr)[-8000:]
 
-    def get(self, path: str) -> tuple[int, bytes]:
+    def request(
+        self,
+        path: str,
+        *,
+        host: str = PUBLIC_HOST,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """One request to the proxy's published port, with an explicit Host header."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=5) as r:
-                return r.status, r.read()
-        except urllib.error.HTTPError as exc:
-            return exc.code, exc.read()
+            conn.request(method, path, body=body, headers={"Host": host, **(headers or {})})
+            response = conn.getresponse()
+            return (
+                response.status,
+                {k.lower(): v for k, v in response.getheaders()},
+                response.read(),
+            )
+        finally:
+            conn.close()
+
+    def get(self, path: str, *, host: str = PUBLIC_HOST) -> tuple[int, bytes]:
+        status, _, body = self.request(path, host=host)
+        return status, body
+
+    def proxy_log(self) -> list[dict[str, object]]:
+        """The proxy's JSON access-log lines."""
+        out = self.compose("logs", "--no-color", "--no-log-prefix", "atlas-proxy", check=False)
+        entries = []
+        for line in out.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return entries
+
+    def from_inside(self, path: str, *, headers: dict[str, str] | None = None) -> int:
+        """A request to the proxy from another container on the stack's network.
+
+        That container is neither loopback nor the gateway, so it is an untrusted peer.
+        """
+        script = (
+            "import http.client,sys,json;"
+            "c=http.client.HTTPConnection('atlas-proxy',8080,timeout=10);"
+            f"c.request('GET',{path!r},headers={{'Host':{PUBLIC_HOST!r},**json.loads(sys.argv[1])}});"
+            "print(c.getresponse().status)"
+        )
+        result = self.compose(
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "--entrypoint",
+            "python",
+            "atlas-api",
+            "-c",
+            script,
+            json.dumps(headers or {}),
+        )
+        return int(result.stdout.strip().splitlines()[-1])
 
     def psql(self, sql: str) -> str:
         # The postgres image trusts local socket connections inside the container.

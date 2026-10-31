@@ -1,5 +1,5 @@
 # Job ids are the status-check names used in branch protection. Keep them stable:
-# backend, legacy, web, gitleaks, audit, compose-lint, compose.
+# backend, legacy, web, gitleaks, audit, compose-lint, compose, image.
 name: CI
 
 on:
@@ -190,21 +190,38 @@ jobs:
         run: uv sync --locked
       - name: Build the Atlas image
         run: docker build -t atlas:local .
-      - name: Image basics (non-root; no source tree, env files or uv; PG 17 client)
+      - name: Compose tests (ADR-003, ADR-004 §3, ADR-005 §3–4)
+        run: uv run pytest tests/compose -v -p no:cacheprovider
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build linux/amd64 and linux/arm64 (not pushed)
+        run: docker buildx build --platform linux/amd64,linux/arm64 .
+      - name: Load the amd64 image for the content checks
+        run: docker buildx build --platform linux/amd64 --load -t atlas:check .
+      - name: Image content (non-root; no source, VCS data, tests, env files or uv; PG 17)
         run: |
           set -x
           fail=0
-          uid="$(docker run --rm --entrypoint id atlas:local -u)"
+          uid="$(docker run --rm --entrypoint id atlas:check -u)"
           [ "$uid" = "10001" ] || { echo "::error::image runs as uid $uid, expected 10001"; fail=1; }
-          leftovers="$(docker run --rm --entrypoint sh atlas:local -c \
-            'ls -d /opt/atlas/src /usr/local/bin/uv 2>/dev/null; find /opt/atlas -name "*.env" 2>/dev/null')"
+          leftovers="$(docker run --rm --entrypoint sh atlas:check -c '
+            ls -d /src /opt/atlas/src /usr/local/bin/uv /.git /opt/atlas/.git 2>/dev/null
+            find / -xdev \( -name .env -o -name "*.env" -o -name .git \) -not -path "/proc/*" 2>/dev/null
+            find /opt/atlas/venv -path "*/site-packages/atlas/*" -name "test*" 2>/dev/null
+            find /opt/atlas/venv -path "*/site-packages/tests" 2>/dev/null')"
           [ -z "$leftovers" ] || { echo "::error::unexpected files in image: $leftovers"; fail=1; }
-          version="$(docker run --rm --entrypoint pg_dump atlas:local --version 2>&1)" || true
+          version="$(docker run --rm --entrypoint pg_dump atlas:check --version 2>&1)" || true
           echo "pg_dump reports: $version"
           case "$version" in
             *" 17."*) ;;
             *) echo "::error::pg_dump is not version 17: $version"; fail=1 ;;
           esac
+          docker run --rm --entrypoint atlas-admin atlas:check --help > /dev/null || fail=1
           exit "$fail"
-      - name: Compose tests (ADR-004 §3, ADR-005 §3–4)
-        run: uv run pytest tests/compose -v -p no:cacheprovider
