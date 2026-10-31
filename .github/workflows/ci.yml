@@ -21,11 +21,37 @@ jobs:
   backend:
     name: backend
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # postgres:17, pinned by digest (ADR-005 §1). Throwaway CI database.
+        image: postgres@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+        env:
+          POSTGRES_PASSWORD: postgres-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # Superuser URL for the DB tests; they fail (not skip) in CI without it.
+      TEST_POSTGRES_URL: postgresql://postgres:postgres-ci@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - name: PostgreSQL 17 client (pg_dump/pg_restore match the server)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
       - name: Install (from uv.lock)
         run: uv sync --locked
       - name: ruff check
@@ -37,7 +63,9 @@ jobs:
       - name: import-linter
         run: uv run lint-imports
       - name: pytest
-        run: uv run pytest
+        run: |
+          pg_dump --version
+          uv run pytest
 
   legacy:
     name: legacy

@@ -43,13 +43,25 @@ uv run python -m atlas.kernel.web --host 127.0.0.1
 
 Configuration rules are in [ADR-004](docs/adr/004-config-and-secrets.md). Only `atlas/kernel/config.py` reads the environment. Everything else receives a `Settings`.
 
+### Database tests
+
+Tests that need PostgreSQL use `TEST_POSTGRES_URL`, a **superuser** URL for a throwaway server. Each test creates its own database and drops it afterwards. The `atlas_app` and `atlas_migrator` roles are cluster-wide, so don't point this at a server you care about. Without the variable, those tests are skipped locally. In CI (`CI=true`) they fail instead.
+
+```bash
+docker run --rm -d --name atlas-test-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17
+export TEST_POSTGRES_URL=postgresql://postgres:test@127.0.0.1:55432/postgres
+uv run pytest
+```
+
+`pg_dump` and `pg_restore` must be on `PATH`, with a major version at least the server's.
+
 ## Checks CI runs
 
 Every job in `.github/workflows/ci.yml` must be green before a PR merges.
 
 | CI job | What it enforces | Run it locally |
 |---|---|---|
-| `backend` | `uv.lock` is current; ruff lint and format; `mypy --strict` on `atlas/`; import-linter contracts; the v1 test suite | `uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest` |
+| `backend` | `uv.lock` is current; ruff lint and format; `mypy --strict` on `atlas/`; import-linter contracts; the v1 test suite, including the database tests against a `postgres:17` service | `uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest` |
 | `legacy` | The legacy test suite still passes | `cd legacy && pip install -r requirements.txt && pytest` |
 | `web` | The frontend builds from `package-lock.json` (lint is informational while it's the legacy frontend) | `cd legacy/frontend && npm ci && npm run lint && npm run build` |
 | `gitleaks` | No secrets in the commits being pushed. A weekly workflow (`gitleaks-weekly`) scans the full history | `gitleaks git --redact .` |

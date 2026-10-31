@@ -320,3 +320,33 @@ def test_connector_secrets_empty_when_built_directly() -> None:
 
     settings = build_settings(_env_file=None, **VALID)
     assert settings.connector_secret_status("ATLAS_CONNECTOR_IMMICH_API_KEY") == "missing"
+
+
+# Database command settings (Phase 3)
+
+
+def test_database_settings_need_no_api_secrets() -> None:
+    from atlas.kernel.config import DatabaseSettings
+
+    settings = DatabaseSettings(
+        _env_file=None,
+        DATABASE_URL="postgresql+psycopg://atlas_app:Qm4tW9zLr2Xv@postgres:5432/atlas",
+    )
+    assert settings.backup_dir == Path("/var/backups/atlas")
+    assert (settings.backup_keep_daily, settings.backup_keep_weekly) == (7, 4)
+    assert settings.migrator_database_url == settings.database_url
+
+
+def test_backup_retention_must_be_positive(make_settings: MakeSettings) -> None:
+    assert "ATLAS_BACKUP_KEEP_DAILY:" in problems_for(make_settings, ATLAS_BACKUP_KEEP_DAILY="0")
+
+
+def test_db_init_settings_defaults() -> None:
+    from atlas.kernel.config import DbInitSettings
+
+    settings = DbInitSettings(
+        _env_file=None,
+        DATABASE_URL="postgresql+psycopg://atlas_app:Qm4tW9zLr2Xv@postgres:5432/atlas",
+    )
+    assert settings.postgres_superuser == "postgres"
+    assert settings.postgres_password_file == Path("/run/secrets/postgres/password")

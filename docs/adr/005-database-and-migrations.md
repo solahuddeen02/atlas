@@ -28,7 +28,7 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
   - Schema `kernel` holds users, permissions, role_permissions, user_permission_overrides, sessions, audit_log, modules, connectors, outbox, rate_limits and settings.
   - Each module owns its own schema (`drive`, `lift`, …).
   - Cross-schema FKs are allowed only *to* `kernel.users`.
-- **Roles** (created by `atlas-init` using the superuser password from `postgres/password`):
+- **Roles** (created by the one-shot `atlas-db-init` service, `atlas-admin db-init`, using the superuser password from `postgres/password`; see the note below):
   - `atlas_migrator` owns the schemas and runs DDL.
   - `atlas_app` gets DML only, and only `INSERT/SELECT` on `audit_log`. The API uses it, so an app compromise can't `DROP` tables or rewrite the audit trail.
 - **Time:**
@@ -66,6 +66,14 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
   4. Runs idempotent seed steps: built-in roles, manifest permissions and default grants, registry sync.
   5. Exits 0.
 - `atlas-api` has `depends_on: { atlas-init: completed_successfully, postgres: healthy, atlas-migrate: completed_successfully }`.
+- **Role setup is its own step (amended in Phase 3).** `atlas-init` must run *before* Postgres starts, because Postgres reads the password file it writes. But roles can only be created *after* Postgres is healthy. So the order is:
+  1. `atlas-init` (`atlas-admin init`) writes the secrets;
+  2. `postgres` starts;
+  3. `atlas-db-init` (`atlas-admin db-init`) runs as superuser. It creates `atlas_migrator` and `atlas_app` if missing and updates a password only when the one in `app.env` no longer works, so a rotated password gets applied. It also creates the database and the `kernel` schema (owned by `atlas_migrator`) and locks down `public`;
+  4. `atlas-migrate`;
+  5. `atlas-api`.
+
+  Only `atlas-db-init` mounts `postgres/password`. Neither the API nor migrations ever see the superuser password.
 - If a migration fails, the API doesn't start with a half-migrated schema, and the operator gets a clear log.
 - **Why not dev's entrypoint-runs-alembic-then-uvicorn?** It would give the long-running API DDL rights and run once per replica or restart. A separate service keeps the API on `atlas_app`. Dev's idea (run at start, not build) is kept.
 

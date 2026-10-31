@@ -189,6 +189,20 @@ Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_S
 - `test_audit_log_append_only`
 - Compose: `test_down_v_preserves_data`, `test_failed_migration_blocks_api`, `test_backup_restore_roundtrip`.
 
+**Delivered in two PRs** (owner-approved):
+- **3a, DB core:** `atlas.kernel.db`, the baseline, the roles and grants, and `db-init`/`migrate`/`backup`/`restore`. Tested against a real Postgres in the `backend` job.
+- **3b, compose:** a minimal image, `deploy/docker-compose.yml`, and the compose tests above in a new `compose` CI job.
+
+Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
+
+**Deferred until Spike S** (marked `TODO(spike-s)` in the code):
+- the bundled IdP's backup and restore in `atlas-admin backup`/`restore`;
+- its external volume `${ATLAS_IDP_VOLUME}` in compose.
+
+**Handed to later phases:**
+- Seeding built-in role grants and manifest permissions: Phase 6 (`TODO(phase-6)`).
+- Per-module migration branches, module schemas in backups, and registry sync: Phase 7 (`TODO(phase-7)`).
+
 ## Phase 4: Deploy skeleton (one-command install)
 
 **Work:**

@@ -50,8 +50,9 @@ APP_ENV_GENERATORS: dict[str, Callable[[], str]] = {
 # TODO(spike-s): bundled IdP only, after its bootstrap: ATLAS_OIDC_CLIENT_SECRET and
 # ATLAS_IDP_ADMIN_TOKEN in atlas/app.env, and the idp/ directory (internal CA, its key,
 # server certificate and key). Not generated until Spike S confirms the IdP.
-# TODO(phase-3): create the atlas_app/atlas_migrator roles from these passwords, and set
-# file ownership for the postgres container's uid.
+# The atlas_app/atlas_migrator roles are created from these passwords by
+# `atlas-admin db-init` (atlas.kernel.db.bootstrap) once Postgres is up.
+# TODO(phase-3b): file ownership so the postgres container's uid can read postgres/password.
 
 
 @dataclass

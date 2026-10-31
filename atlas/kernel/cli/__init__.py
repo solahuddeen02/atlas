@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from atlas.kernel.cli import db
 from atlas.kernel.cli.init import InitError, run_init
 from atlas.kernel.config import load_init_settings
 
@@ -36,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument("--secrets-dir", type=Path, help="Overrides ATLAS_SECRETS_DIR.")
     init.set_defaults(handler=_cmd_init)
+
+    db.add_commands(commands)
     return parser
 
 
