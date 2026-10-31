@@ -12,7 +12,7 @@ The audit's worst authorization bugs have one cause: **authorization was a helpe
 - Domain functions took `owner_id: int | None = None`, and `None` meant "no filter" (O6).
 - A missing object returned 404, while someone else's returned 403 (O5).
 
-v1 adds household roles, per-module access, an admin console and, later, sharing. The design must make this bug class **structurally impossible**, not just "fixed this time".
+Foundation adds household roles, per-module access, an admin console and, later, sharing. The design must make this bug class **structurally impossible**, not just "fixed this time".
 
 ## Decision
 
@@ -22,7 +22,7 @@ v1 adds household roles, per-module access, an admin console and, later, sharing
 |---|---|---|---|
 | **Role (RBAC)** | What kind of household member is this? | `users.role` ∈ {`owner`,`admin`,`adult`,`child`,`guest`} | Child |
 | **Permission (per module)** | May this role/person use this capability? | `role_permissions` (role → permission), plus `user_permission_overrides` (allow/deny for one user) | `drive.files.write`, `admin.users.manage` |
-| **Object (ownership/sharing)**, from v2 | May this person act on *this* thing? | `owner_id` on module rows, plus a kernel `shares` table | Alice's "Holiday" folder is shared read-only with the `adult` role |
+| **Object (ownership/sharing)**, from First modules | May this person act on *this* thing? | `owner_id` on module rows, plus a kernel `shares` table | Alice's "Holiday" folder is shared read-only with the `adult` role |
 
 - **Permissions are strings** of the form `<module>.<resource>.<action>`.
 - **Modules declare their permissions** in their manifest ([ARCHITECTURE](../ARCHITECTURE.md) §3), each with **default roles**, for example `drive.files.write: [owner, admin, adult, child]`.
@@ -37,9 +37,9 @@ v1 adds household roles, per-module access, an admin console and, later, sharing
   - `child` and `guest` can never hold `*.share.public`, `admin.*` or `connectors.*`. That is a hard ceiling per role, not a default.
   - `guest` accounts may have `expires_at`. Once it passes, the account is treated as disabled.
 
-**Object rules (designed now, built with the v2 modules):**
+**Object rules (designed now, built with the First modules milestone):**
 - The owner of a row can do everything with it.
-- Shares grant `read` | `write` | `manage` to a user, a role, or (v2+) a link token with an expiry.
+- Shares grant `read` | `write` | `manage` to a user, a role, or (from First modules) a link token with an expiry.
 - Folder shares are inherited by descendants.
 - A share can never grant more than the sharer holds.
 - Children's shares are limited to inside the household (no link shares).
@@ -58,7 +58,7 @@ Service command(principal, args)                    ← every id argument is res
      ▼
 Scoped repository (always filters by principal)     ← there is no unscoped query method in module code
      ▼
-PostgreSQL (FKs; optional RLS backstop, v2)
+PostgreSQL (FKs; optional RLS backstop, First modules)
 ```
 
 **Rule 1: Every route declares a permission, or says `public=True`.** Modules don't create `APIRouter`s directly. They get one from `atlas.sdk.router(module)`, whose decorators *require* a `permission=` argument (or an explicit `public=True` for things like `/health`). At startup the registry walks every mounted route and **refuses to boot** if any route lacks a declaration. A CI test does the same walk.
@@ -89,16 +89,16 @@ PostgreSQL (FKs; optional RLS backstop, v2)
 ### 3. Database backstop (defense in depth)
 
 - **Foreign keys everywhere** (`owner_id → users.id`, `parent_id → <same table>.id`), plus check constraints for invariants that can be stated in SQL.
-- **PostgreSQL Row-Level Security** on module tables that hold user content, starting with the v2 files module:
+- **PostgreSQL Row-Level Security** on module tables that hold user content, starting with the files module (First modules):
   - The unit-of-work sets `SET LOCAL atlas.user_id = …` and `atlas.role = …` per transaction.
   - Policies mirror owner/share visibility.
   - If a future bug skips `get_for`, the DB still returns nothing.
-- v1's kernel tables (users, roles, sessions, audit) are reached only by kernel code and admin permissions, so RLS is deferred there.
+- Foundation's kernel tables (users, roles, sessions, audit) are reached only by kernel code and admin permissions, so RLS is deferred there.
 
 ## Alternatives considered
 
 - **Keep router-level helpers (`_get_owned_object`) but be more careful.** Rejected. That is exactly what failed, because it depends on every author remembering every id.
-- **A policy engine (OPA/Cedar/Casbin).** Rejected for v1: overkill for one household, and it adds a moving part. `authz` keeps a narrow `check(principal, action, resource)` interface, so one could sit behind it later.
+- **A policy engine (OPA/Cedar/Casbin).** Rejected for Foundation: overkill for one household, and it adds a moving part. `authz` keeps a narrow `check(principal, action, resource)` interface, so one could sit behind it later.
 - **Permissions only from IdP groups.** Rejected. Fine-grained module permissions and object sharing are Atlas concepts, and changing them must not need an IdP round-trip. The IdP groups Atlas *does* manage are limited to client access (e.g. Immich).
 - **RLS as the only mechanism.** Rejected. It's a strong backstop, but it gives poor error semantics and is hard to test alone. It complements the service layer rather than replacing it.
 
@@ -124,4 +124,4 @@ PostgreSQL (FKs; optional RLS backstop, v2)
 
 - There's a little more ceremony per endpoint (declare a permission, use `get_for`), in exchange for authorization that can't be forgotten.
 - Module authors get a small SDK surface. Kernel internals can change without breaking modules.
-- Porting today's drive/objects code in v2 is mostly mechanical. Every `get_object(db, id)` becomes `files.get_for(principal, action, id)`.
+- Porting today's drive/objects code in First modules is mostly mechanical. Every `get_object(db, id)` becomes `files.get_for(principal, action, id)`.

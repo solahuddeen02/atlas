@@ -1,4 +1,6 @@
-# Atlas v1: delivery plan
+# Atlas plan: Foundation (to v1.0.0)
+
+The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVer; see [README](../README.md#versioning)). "Foundation", "First modules" and "Household apps" are milestone names, not version numbers.
 
 **Goal:** the foundation from [VISION](VISION.md), built as designed in [ARCHITECTURE](ARCHITECTURE.md) and the ADRs, and installable by any self-hoster following [SELF_HOSTING](SELF_HOSTING.md).
 
@@ -157,7 +159,7 @@
 
 Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_SECRET` are set by hand (the BYO flow). `ATLAS_OIDC_INTERNAL_URL` and `ATLAS_OIDC_CA_FILE` move to Phase 5, which uses them.
 
-**Moved to Phase 4**, because there's no v1 image or compose file before it:
+**Moved to Phase 4**, because there's no Foundation image or compose file before it:
 - The container test. Phase 2 runs the same check at process level: `python -m atlas.kernel.web` exits 2 before binding a socket.
 - `docker compose config` rendering from `.env.example`. Phase 2 lints `.env.example` instead.
 
@@ -392,10 +394,10 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
 ---
 
-## After v1 (pointers, not commitments)
+## After Foundation (pointers, not commitments)
 
-- **v2:**
+- **First modules** (1.x minor releases):
   - `files` → `drive` ported from `legacy/` (ARCHITECTURE §8), with sharing on kernel `shares` and an RLS backstop;
   - **decide Photos** (leaning: Immich connector link + SSO, no Atlas gallery);
   - legacy data import.
-- **v3+:** the `lift` module, the Nextcloud-replacement roadmap, and Hermes under its own ADR.
+- **Household apps:** the `lift` module, the Nextcloud-replacement roadmap, and Hermes under its own ADR.

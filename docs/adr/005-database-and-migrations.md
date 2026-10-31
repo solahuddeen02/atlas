@@ -48,8 +48,8 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
   - Module migrations may `depends_on` kernel revisions.
   - Upgrade target is `heads`.
 - **Fresh baseline:**
-  - v1 starts with `0001_kernel_baseline`.
-  - The legacy migrations (`87f6cab4a51a`, `c99f9c7e897e`, `c1fdc6c1bce2`) stay with the legacy code until the v2 files module, which gets its own baseline and a one-off import from any legacy SQLite DB.
+  - Foundation starts with `0001_kernel_baseline`.
+  - The legacy migrations (`87f6cab4a51a`, `c99f9c7e897e`, `c1fdc6c1bce2`) stay with the legacy code until the files module (First modules), which gets its own baseline and a one-off import from any legacy SQLite DB.
 - **Rules:**
   - Forward-only in production. Downgrades exist for dev only.
   - Destructive changes follow expand → migrate → contract across releases.
@@ -88,7 +88,7 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
 - **Backups:**
   - `docker compose run --rm atlas-backup` writes a `pg_dump -Fc` plus an IdP backup into `ATLAS_BACKUP_DIR`, with retention `ATLAS_BACKUP_KEEP_DAILY` (default 7) and `ATLAS_BACKUP_KEEP_WEEKLY` (default 4).
   - Scheduling it (cron, a systemd timer, your NAS's scheduler) and copying backups off the host are the operator's choice. SELF_HOSTING shows a generic example.
-  - A **restore drill** is part of the v1 release checklist.
+  - A **restore drill** is part of the 1.0.0 release checklist.
 - `docker-compose.yml` starts with a comment and SELF_HOSTING has a warning box: **never run `docker compose down -v`.**
 
 ### 5. What to reuse from `origin/dev`
@@ -102,8 +102,8 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
 | `core/` vs `apps/` split | **Reuse the concept** | It becomes `atlas/kernel` + `atlas/sdk` + `modules/*` with import-linter contracts |
 | Tenant model (`tenants`, `tenant_members`, tenant/role in JWT) | **Dropped (owner decision)** | One household per instance ([VISION](../VISION.md) non-goals). Trusting tenant and role from the JWT was itself a flaw (AUDIT §6) |
 | Invite tokens | **Do not reuse** | Replaced by admin-created accounts, IdP reset tokens, or link codes for BYO ([ADR-001](001-identity.md)) |
-| Share links | **Defer to v2** | Redesign on kernel `shares` ([ADR-002](002-authorization.md)) with a `deleted_at` check, hashed tokens and `timestamptz` expiry |
-| Pillow thumbnails | **Defer to v2** (likely moot if Photos is the Immich link) | If built: background worker, decompression-bomb guard, size caps |
+| Share links | **Defer to First modules** | Redesign on kernel `shares` ([ADR-002](002-authorization.md)) with a `deleted_at` check, hashed tokens and `timestamptz` expiry |
+| Pillow thumbnails | **Defer to First modules** (likely moot if Photos is the Immich link) | If built: background worker, decompression-bomb guard, size caps |
 | Admin stats endpoint | **Defer** | Rebuild on module-provided metrics |
 | Migrations `a1b2c3d4e5f6`, `b2c3d4e5f6a7`, `d4e8f2a9b3c5` | **Do not reuse** | Superseded by the fresh kernel baseline |
 
@@ -111,7 +111,7 @@ Self-hosters will run `docker compose down -v` by accident, sometimes following 
 
 - Dev and tests need Docker for Postgres (`make db`).
 - First install has one extra step: create the external volumes. The quick start includes it, and `atlas-init` prints a clear error if they're missing.
-- Legacy SQLite data is imported once in v2. v1 doesn't touch it.
+- Legacy SQLite data is imported once in First modules. Foundation doesn't touch it.
 
 ## Verification
 

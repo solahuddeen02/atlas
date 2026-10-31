@@ -1,6 +1,6 @@
 # deploy/
 
-The v1 Compose stack. `atlas-proxy` is the only service that publishes a port: `${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`. Put a tunnel or your own TLS proxy in front of it ([ADR-003](../docs/adr/003-internet-exposure.md)). The legacy stack is in `legacy/docker-compose.yml`.
+The Atlas Compose stack. `atlas-proxy` is the only service that publishes a port: `${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`. Put a tunnel or your own TLS proxy in front of it ([ADR-003](../docs/adr/003-internet-exposure.md)). The legacy stack is in `legacy/docker-compose.yml`.
 
 > ⚠️ **Never run `docker compose down -v`.** Stop with `docker compose down`.
 

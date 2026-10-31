@@ -105,7 +105,7 @@ Atlas **refuses to start** on unsafe configuration: a weak or placeholder `SECRE
 | `ATLAS_IMAGE_TAG` | the release you checked out | Atlas image tag. Pin it, and change it only when [upgrading](#upgrading) |
 | `ATLAS_REAL_IP_HEADER` | `X-Forwarded-For` | Header carrying the client IP from the component in front. Set `CF-Connecting-IP` when using the Cloudflare Tunnel |
 | `ATLAS_TRUSTED_PROXY_CIDRS` | *(empty)* | Extra peers allowed to set `ATLAS_REAL_IP_HEADER` (comma-separated IPs/CIDRs). Loopback is always trusted, and with a **loopback** `ATLAS_BIND_ADDRESS` so is the Docker gateway. With **any other bind this is required**, and the proxy refuses to start without it: Docker's userland proxy makes every connection arrive from the gateway, so it isn't trusted implicitly ([ADR-003](adr/003-internet-exposure.md) §1) |
-| `ATLAS_MAX_BODY_SIZE` | `10m` | Max request body at the proxy (raised by file modules in v2) |
+| `ATLAS_MAX_BODY_SIZE` | `10m` | Max request body at the proxy (raised by the file modules in First modules) |
 | `ATLAS_RATE_LIMIT_AUTH` | `10r/m` | Proxy rate limit per client IP for authentication endpoints |
 | `ATLAS_RATE_LIMIT_API` | `20r/s` | Proxy rate limit per client IP for the rest of `/api/` |
 | `ATLAS_BACKUP_KEEP_DAILY` | `7` | Daily backups kept by `atlas-backup` |
@@ -132,7 +132,7 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | `ATLAS_IDP_ADMIN_TOKEN` | *(generated with the bundled IdP)* | Service-account token the console uses to call the IdP admin API |
 | `ATLAS_STEP_UP_MAX_AGE` | `300` | Seconds a re-authentication stays valid for admin actions |
 | `ATLAS_SESSION_IDLE_<ROLE>` / `ATLAS_SESSION_MAX_<ROLE>` | owner/admin `12h`/`7d`; adult and child `14d`/`30d`; guest `1d`/until expiry | Session idle and absolute lifetimes per role (`OWNER`, `ADMIN`, `ADULT`, `CHILD`, `GUEST`) |
-| `ATLAS_MODULES` | `hello,immich` (v1) | Installed modules to load. Enabling them happens in the admin console |
+| `ATLAS_MODULES` | `hello,immich` (Foundation) | Installed modules to load. Enabling them happens in the admin console |
 | `ATLAS_MODULE_<ID>_*` | per module | Non-secret module settings, documented by each module |
 | `ATLAS_CONNECTOR_<NAME>_*` | *(unset)* | Connector secrets referenced by name from the console, e.g. `ATLAS_CONNECTOR_IMMICH_API_KEY`. Put them in `${ATLAS_SECRETS_DIR}/atlas/connectors.env` |
 | `ATLAS_LOG_LEVEL` | `info` | `debug`, `info`, `warning` or `error` |

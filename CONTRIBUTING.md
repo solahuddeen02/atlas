@@ -1,16 +1,16 @@
 # Contributing
 
-Atlas is being rebuilt as the v1 platform described in [docs/PLAN-v1.md](docs/PLAN-v1.md).
+Atlas is being rebuilt as the platform described in [docs/PLAN-v1.md](docs/PLAN-v1.md).
 Today's app lives in [`legacy/`](legacy/) and only gets security fixes.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `atlas/kernel/`, `atlas/sdk/` | The v1 platform ([ARCHITECTURE §2](docs/ARCHITECTURE.md#2-code-layout-and-module-boundaries)) |
-| `modules/` | v1 modules. They import `atlas.sdk` only |
-| `web/` | v1 SPA (from Phase 7) |
-| `deploy/` | v1 compose stack (from Phases 2–4) |
+| `atlas/kernel/`, `atlas/sdk/` | The new platform ([ARCHITECTURE §2](docs/ARCHITECTURE.md#2-code-layout-and-module-boundaries)) |
+| `modules/` | Modules. They import `atlas.sdk` only |
+| `web/` | The new SPA (from Phase 7) |
+| `deploy/` | The compose stack (from Phases 2–4) |
 | `legacy/` | Today's app: `core/`, `frontend/`, `tests/`, `alembic/`, its Dockerfile and compose file |
 | `scripts/ci/` | Checks run by CI |
 
@@ -70,7 +70,7 @@ Every job in `.github/workflows/ci.yml` must be green before a PR merges.
 
 | CI job | What it enforces | Run it locally |
 |---|---|---|
-| `backend` | `uv.lock` is current; ruff lint and format; `mypy --strict` on `atlas/`; import-linter contracts; the v1 test suite, including the database tests against a `postgres:17` service | `uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest` |
+| `backend` | `uv.lock` is current; ruff lint and format; `mypy --strict` on `atlas/`; import-linter contracts; the new platform's test suite, including the database tests against a `postgres:17` service | `uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest` |
 | `legacy` | The legacy test suite still passes | `cd legacy && pip install -r requirements.txt && pytest` |
 | `web` | The frontend builds from `package-lock.json` (lint is informational while it's the legacy frontend) | `cd legacy/frontend && npm ci && npm run lint && npm run build` |
 | `gitleaks` | No secrets in the commits being pushed. A weekly workflow (`gitleaks-weekly`) scans the full history | `gitleaks git --redact .` |
