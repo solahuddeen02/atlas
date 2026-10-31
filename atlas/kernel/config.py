@@ -18,7 +18,7 @@ import string
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 from urllib.parse import unquote, urlsplit
 
 from dotenv import dotenv_values
@@ -119,8 +119,8 @@ def _check_database_url(value: str, *, production: bool) -> None:
             raise ValueError("uses a well-known password; run `atlas-admin init` to generate one")
 
 
-class Settings(BaseSettings):
-    """Kernel settings. Build with `load_settings()`, or `Settings(...)` in tests."""
+class DatabaseSettings(BaseSettings):
+    """What the database commands need (`migrate`, `backup`, `restore`), and no more."""
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -128,17 +128,58 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    # Declared first: the validators below read it from `info.data`.
+    # Declared first: the validators read it from `info.data`.
     env: Environment = Field(default=Environment.PRODUCTION, validation_alias="ATLAS_ENV")
-
-    secret_key: SecretStr = Field(validation_alias="SECRET_KEY")
-    secret_key_previous: SecretStr | None = Field(
-        default=None, validation_alias="SECRET_KEY_PREVIOUS"
-    )
 
     database_url: SecretStr = Field(validation_alias="DATABASE_URL")
     migrator_database_url_override: SecretStr | None = Field(
         default=None, validation_alias="ATLAS_MIGRATOR_DATABASE_URL"
+    )
+
+    # In-container path for backups and pre-migration dumps (ADR-005 §3, §4).
+    backup_dir: Path = Field(
+        default=Path("/var/backups/atlas"), validation_alias="ATLAS_BACKUP_DIR"
+    )
+    backup_keep_daily: int = Field(default=7, ge=1, validation_alias="ATLAS_BACKUP_KEEP_DAILY")
+    backup_keep_weekly: int = Field(default=4, ge=0, validation_alias="ATLAS_BACKUP_KEEP_WEEKLY")
+
+    @field_validator("database_url", "migrator_database_url_override")
+    @classmethod
+    def _validate_database_url(
+        cls, value: SecretStr | None, info: ValidationInfo
+    ) -> SecretStr | None:
+        if value is not None:
+            _check_database_url(value.get_secret_value(), production=_is_production(info))
+        return value
+
+    @property
+    def is_production(self) -> bool:
+        return self.env == Environment.PRODUCTION
+
+    @property
+    def migrator_database_url(self) -> SecretStr:
+        """ADR-005: falls back to DATABASE_URL when no separate migrator URL is set."""
+        return self.migrator_database_url_override or self.database_url
+
+
+class DbInitSettings(DatabaseSettings):
+    """`atlas-admin db-init`: the only command that uses the Postgres superuser."""
+
+    postgres_superuser: str = Field(
+        default="postgres", min_length=1, validation_alias="ATLAS_POSTGRES_SUPERUSER"
+    )
+    postgres_password_file: Path = Field(
+        default=Path("/run/secrets/postgres/password"),
+        validation_alias="ATLAS_POSTGRES_PASSWORD_FILE",
+    )
+
+
+class Settings(DatabaseSettings):
+    """Kernel settings. Build with `load_settings()`, or `Settings(...)` in tests."""
+
+    secret_key: SecretStr = Field(validation_alias="SECRET_KEY")
+    secret_key_previous: SecretStr | None = Field(
+        default=None, validation_alias="SECRET_KEY_PREVIOUS"
     )
 
     public_url: str = Field(validation_alias="ATLAS_PUBLIC_URL")
@@ -166,15 +207,6 @@ class Settings(BaseSettings):
             _check_secret_key(value.get_secret_value())
         return value
 
-    @field_validator("database_url", "migrator_database_url_override")
-    @classmethod
-    def _validate_database_url(
-        cls, value: SecretStr | None, info: ValidationInfo
-    ) -> SecretStr | None:
-        if value is not None:
-            _check_database_url(value.get_secret_value(), production=_is_production(info))
-        return value
-
     @field_validator("public_url", "oidc_issuer")
     @classmethod
     def _validate_url(cls, value: str, info: ValidationInfo) -> str:
@@ -191,15 +223,6 @@ class Settings(BaseSettings):
         return value
 
     # Derived settings. Production values can't be overridden.
-
-    @property
-    def is_production(self) -> bool:
-        return self.env == Environment.PRODUCTION
-
-    @property
-    def migrator_database_url(self) -> SecretStr:
-        """ADR-005: falls back to DATABASE_URL when no separate migrator URL is set."""
-        return self.migrator_database_url_override or self.database_url
 
     @property
     def docs_enabled(self) -> bool:
@@ -235,30 +258,38 @@ class InitSettings(BaseSettings):
     secrets_path: Path = Field(default=Path("./secrets"), validation_alias="ATLAS_SECRETS_DIR")
 
 
-def _field_alias(loc: tuple[int | str, ...]) -> str:
+_M = TypeVar("_M", bound=BaseSettings)
+_D = TypeVar("_D", bound=DatabaseSettings)
+
+
+def _field_alias(model: type[BaseSettings], loc: tuple[int | str, ...]) -> str:
     if not loc:
         return "configuration"
     name = str(loc[0])
-    field = Settings.model_fields.get(name)
+    field = model.model_fields.get(name)
     alias = field.validation_alias if field is not None else None
     return alias if isinstance(alias, str) else name.upper()
 
 
-def _problems(error: ValidationError) -> list[str]:
+def _problems(model: type[BaseSettings], error: ValidationError) -> list[str]:
     problems = []
     for item in error.errors(include_input=False, include_url=False):
         reason = "is required" if item["type"] == "missing" else item["msg"]
         reason = reason.removeprefix("Value error, ")
-        problems.append(f"{_field_alias(item['loc'])}: {reason}")
+        problems.append(f"{_field_alias(model, item['loc'])}: {reason}")
     return problems
+
+
+def _build(model: type[_M], **values: Any) -> _M:
+    try:
+        return model(**values)
+    except ValidationError as exc:
+        raise ConfigError(_problems(model, exc)) from None
 
 
 def build_settings(**values: Any) -> Settings:
     """Construct `Settings`, converting validation errors into a value-free `ConfigError`."""
-    try:
-        return Settings(**values)
-    except ValidationError as exc:
-        raise ConfigError(_problems(exc)) from None
+    return _build(Settings, **values)
 
 
 def _env_files(environ: Mapping[str, str]) -> list[Path]:
@@ -266,30 +297,42 @@ def _env_files(environ: Mapping[str, str]) -> list[Path]:
     return [Path(p.strip()) for p in raw.split(",") if p.strip()]
 
 
-def load_settings() -> Settings:
-    """Build `Settings` for a running process from env files and the environment."""
-    environ = os.environ
-    files = _env_files(environ)
+def _load(model: type[_D]) -> tuple[_D, list[Path]]:
+    """Build `model` for a running process from the env files and the environment."""
+    files = _env_files(os.environ)
     missing = [str(p) for p in files if not p.is_file()]
     if missing:
         raise ConfigError(
             [f"ATLAS_ENV_FILES: file not found: {p} (run `atlas-admin init`)" for p in missing]
         )
-
-    settings = build_settings(_env_file=tuple(files))
+    settings = _build(model, _env_file=tuple(files))
     if settings.env == Environment.TEST:
         raise ConfigError(["ATLAS_ENV: 'test' is only for Settings built inside tests"])
+    return settings, files
 
+
+def load_settings() -> Settings:
+    """Build `Settings` for the API process."""
+    settings, files = _load(Settings)
     connector_secrets: dict[str, str] = {}
     for path in files:
         for key, value in dotenv_values(path).items():
             if key.upper().startswith(CONNECTOR_PREFIX) and value:
                 connector_secrets[key.upper()] = value
-    for key, value in environ.items():
+    for key, value in os.environ.items():
         if key.upper().startswith(CONNECTOR_PREFIX) and value:
             connector_secrets[key.upper()] = value
     settings._connector_secrets = connector_secrets
     return settings
+
+
+def load_database_settings() -> DatabaseSettings:
+    """Build `DatabaseSettings` for `migrate`, `backup` and `restore`."""
+    return _load(DatabaseSettings)[0]
+
+
+def load_db_init_settings() -> DbInitSettings:
+    return _load(DbInitSettings)[0]
 
 
 def load_init_settings() -> InitSettings:
