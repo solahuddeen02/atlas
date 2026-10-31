@@ -37,13 +37,15 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY atlas ./atlas
 RUN uv sync --frozen --no-dev --no-editable \
     && rm -rf /opt/atlas/src /usr/local/bin/uv /root/.cache
+# Leave the deleted source dir before the next RUN: BuildKit recreates a missing
+# WORKDIR (empty) for every later step.
+WORKDIR /opt/atlas
 
 RUN groupadd --system --gid 10001 atlas \
     && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent \
         --shell /usr/sbin/nologin atlas
 
 ENV PATH=/opt/atlas/venv/bin:$PATH
-WORKDIR /opt/atlas
 USER 10001:10001
 EXPOSE 8000
 CMD ["python", "-m", "atlas.kernel.web"]
