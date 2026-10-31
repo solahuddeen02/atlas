@@ -192,9 +192,19 @@ jobs:
         run: docker build -t atlas:local .
       - name: Image basics (non-root; no source tree, env files or uv; PG 17 client)
         run: |
-          test "$(docker run --rm --entrypoint id atlas:local -u)" = "10001"
-          docker run --rm --entrypoint sh atlas:local -c \
-            'test ! -e /opt/atlas/src && test ! -e /usr/local/bin/uv && test -z "$(find /opt/atlas -name "*.env")"'
-          docker run --rm --entrypoint pg_dump atlas:local --version | grep -q " 17\."
+          set -x
+          fail=0
+          uid="$(docker run --rm --entrypoint id atlas:local -u)"
+          [ "$uid" = "10001" ] || { echo "::error::image runs as uid $uid, expected 10001"; fail=1; }
+          leftovers="$(docker run --rm --entrypoint sh atlas:local -c \
+            'ls -d /opt/atlas/src /usr/local/bin/uv 2>/dev/null; find /opt/atlas -name "*.env" 2>/dev/null')"
+          [ -z "$leftovers" ] || { echo "::error::unexpected files in image: $leftovers"; fail=1; }
+          version="$(docker run --rm --entrypoint pg_dump atlas:local --version 2>&1)" || true
+          echo "pg_dump reports: $version"
+          case "$version" in
+            *" 17."*) ;;
+            *) echo "::error::pg_dump is not version 17: $version"; fail=1 ;;
+          esac
+          exit "$fail"
       - name: Compose tests (ADR-004 §3, ADR-005 §3–4)
         run: uv run pytest tests/compose -v -p no:cacheprovider
