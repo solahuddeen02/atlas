@@ -156,3 +156,8 @@ def migrated_db(empty_db: PgTestDb) -> PgTestDb:
 
     run_migrate(empty_db.settings)
     return empty_db
+
+
+# Compose tests (tests/compose) need a Docker daemon. They run only when
+# RUN_COMPOSE_TESTS=1 (the `compose` CI job sets it); everywhere else they're skipped.
+RUN_COMPOSE_TESTS = os.environ.get("RUN_COMPOSE_TESTS", "") == "1"

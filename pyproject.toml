@@ -43,6 +43,9 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = ["-q", "--import-mode=importlib", "--strict-markers"]
+markers = [
+    "compose: needs a Docker daemon; runs only with RUN_COMPOSE_TESTS=1 (CI job `compose`)",
+]
 
 [tool.ruff]
 target-version = "py311"
