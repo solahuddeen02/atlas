@@ -63,7 +63,7 @@ def test_loopback_is_the_default(render: Render) -> None:
     assert len(trusted(conf)) == 3
 
 
-@pytest.mark.parametrize("bind", ["0.0.0.0", "192.168.1.5", "::"])
+@pytest.mark.parametrize("bind", ["0.0.0.0", "192.0.2.5", "::"])
 def test_nonloopback_bind_requires_explicit_trusted_cidrs(render: Render, bind: str) -> None:
     result, conf = render(ATLAS_BIND_ADDRESS=bind)
     assert result.returncode != 0
@@ -74,11 +74,11 @@ def test_nonloopback_bind_requires_explicit_trusted_cidrs(render: Render, bind: 
 
 def test_nonloopback_bind_trusts_only_explicit_cidrs(render: Render) -> None:
     result, conf = render(
-        ATLAS_BIND_ADDRESS="0.0.0.0", ATLAS_TRUSTED_PROXY_CIDRS="192.168.1.10, 10.0.0.0/8,fd00::/8"
+        ATLAS_BIND_ADDRESS="0.0.0.0", ATLAS_TRUSTED_PROXY_CIDRS="192.0.2.10, 10.0.0.0/8,fd00::/8"
     )
     assert result.returncode == 0, result.stderr
     # No auto-detected gateway: loopback plus exactly what the operator listed.
-    assert trusted(conf) == {"127.0.0.1/32", "::1/128", "192.168.1.10", "10.0.0.0/8", "fd00::/8"}
+    assert trusted(conf) == {"127.0.0.1/32", "::1/128", "192.0.2.10", "10.0.0.0/8", "fd00::/8"}
 
 
 @pytest.mark.parametrize(
