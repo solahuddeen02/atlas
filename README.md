@@ -32,6 +32,17 @@ The phases of the Foundation plan ([PLAN](docs/PLAN-v1.md)), in order:
 
 Until then, Atlas is set up the "bring your own OIDC provider" way.
 
+## Requirements
+
+What the planned 1.0 install needs (details in [SELF_HOSTING → Requirements](docs/SELF_HOSTING.md#requirements)):
+
+- a 64-bit Linux host (amd64 or arm64);
+- Docker Engine with the Compose v2 plugin;
+- about 1 GB of free RAM and 2 GB of disk (Atlas, Postgres and the bundled IdP);
+- two HTTPS hostnames you control (one for Atlas, one for the identity provider), with valid, publicly trusted TLS certificates.
+
+No email server is needed.
+
 ## Architecture in brief
 
 - **A modular monolith.** A Python kernel (`atlas/kernel`) provides identity, authorization, the module registry, events and the admin console. Modules (`modules/`) may import only the stable SDK (`atlas/sdk`), and CI enforces that boundary ([ARCHITECTURE](docs/ARCHITECTURE.md)).
@@ -51,6 +62,7 @@ Until then, Atlas is set up the "bring your own OIDC provider" way.
 | [PLAN](docs/PLAN-v1.md) | The Foundation plan: every phase with its work, acceptance criteria and tests |
 | [SELF_HOSTING](docs/SELF_HOSTING.md) | **The planned 1.0 install.** It describes the finished Foundation; parts of it don't work yet |
 | [CONTRIBUTING](CONTRIBUTING.md) | Repo layout, local setup, and every check CI runs |
+| [CHANGELOG](CHANGELOG.md) | Release history and upgrade notes |
 | [SECURITY](SECURITY.md) | How to report a vulnerability (privately, never in a public issue) |
 | [legacy/](legacy/README.md) | The frozen Drive/Photos app: features, how to run it, configuration |
 

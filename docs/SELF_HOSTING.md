@@ -296,7 +296,7 @@ docker compose run --rm atlas-backup
 
 ## Upgrading
 
-1. Read the release notes for breaking changes.
+1. Read the [release notes](../CHANGELOG.md) for breaking changes, especially the release's **Upgrade notes** subsection.
 2. Take a backup:
 
    ```bash
