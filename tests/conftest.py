@@ -50,6 +50,26 @@ def app_client(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def auth_client(app_client):
+    """app_client with a registered + logged-in user (Bearer token attached).
+
+    Protected endpoints resolve get_current_user via the Authorization header,
+    so tests hitting /folders, /objects, /drive, etc. should use this fixture.
+    """
+    app_client.post(
+        "/auth/register",
+        json={"username": "tester", "password": "secret123"},
+    )
+    login = app_client.post(
+        "/auth/login",
+        json={"username": "tester", "password": "secret123"},
+    )
+    token = login.json()["access_token"]
+    app_client.headers["Authorization"] = f"Bearer {token}"
+    return app_client
+
+
+@pytest.fixture
 def test_paths(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
     data_dir = tmp_path / "data"
