@@ -16,7 +16,6 @@ data/
 Thumbs.db
 
 # Claude Code
-CLAUDE.md
 .claude/
 scripts/sync-obsidian.ps1
 
