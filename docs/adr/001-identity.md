@@ -182,7 +182,11 @@ These requirements come from how OIDC and passkeys work. Operators must plan for
    - The bundled proxy re-encrypts to Kanidm and verifies that CA.
    - Atlas's back-channel calls (discovery, token, JWKS, admin API) go to the internal URL and verify the same CA, while still validating `iss` against the public issuer.
    - Operators don't manage this certificate. It's rotated by re-running `atlas-init --rotate-idp-cert`.
-5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike. The spike confirmed that the real client IP reaches Kanidm through the proxy; option name to be recorded.
+5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike. The spike confirmed that the real client IP reaches Kanidm through the proxy. The configuration used:
+   - Kanidm 1.12.0, server config `version = "2"`: `[http_client_address_info]` with `x-forward-for = ["<proxy address>", ...]` trusts `X-Forwarded-For` only from the listed peers.
+   - Do **not** use the legacy `trust_x_forward_for = true`: in 1.12.0 it trusts the header from **all** peers.
+   - Kanidm reads the **first** `X-Forwarded-For` entry, so the proxy must **overwrite** the header with the verified client address (nginx `proxy_set_header X-Forwarded-For $remote_addr;`), never append to it (`$proxy_add_x_forwarded_for`). Otherwise clients can spoof their IP.
+   - PROXY protocol was not tested.
 6. **Hairpin access.** The Immich server (a separate stack) must reach the IdP's public URL server-to-server. If your network can't hairpin to its own public hostname, add a local DNS override that points that hostname to your reverse proxy. Details are in [SELF_HOSTING](../SELF_HOSTING.md).
 
 With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just needs to be HTTPS and reachable by browsers, Atlas and Immich.
@@ -261,6 +265,8 @@ With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just
 
 Interactive Atlas login sends `prompt=login` **by default**, with a setting to turn it off (its name is chosen in Phase 5). A lingering IdP session on a shared device therefore never silently signs the next person in to Atlas.
 Known limitation: Immich may still reuse a lingering IdP session.
+
+Possible mitigation, untested: Kanidm 1.12.0 account policy has a per-group auth-expiry setting. Whether it bounds the browser IdP session, and which value applies across several groups, must be tested (in Phase 5a, against the bundled stack) before relying on it.
 
 **Gap 10: no session listing or revocation for other people (row 10).** The fallback in the row note is adopted:
 - Atlas revokes only its own sessions.

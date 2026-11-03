@@ -265,6 +265,12 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
   - **Never log the client secret**: the bootstrap never logs `kanidm system oauth2 get` output.
   - **`limit_req` per client IP on the IdP vhost's authentication endpoints** (Kanidm's lockout is per account).
   - **Kanidm 1.12.x pinned by digest.** Re-run the spike checklist on upgrades.
+- 5a, from the Spike S follow-up ([ADR-001](adr/001-identity.md#the-bundled-idps-hostname-and-tls-requirements) item 5, Gap 5):
+  - **Kanidm client address:** `[http_client_address_info]` `x-forward-for`, limited to `atlas-proxy`. Never the legacy `trust_x_forward_for` key.
+  - **The IdP vhost overwrites `X-Forwarded-For` with `$remote_addr`**, as `atlas-proxy` already does in `deploy/nginx/40-atlas-render.sh`. Never `$proxy_add_x_forwarded_for`.
+  - **Open design point:** the trusted list needs `atlas-proxy`'s address on the internal network. Either give it a fixed address on a fixed internal subnet, or verify that Kanidm accepts a CIDR there. Don't assume CIDR support.
+  - **Kanidm's Immich client:** strict redirect URIs, exactly the three in [SELF_HOSTING → Connecting Immich](SELF_HOSTING.md#connecting-immich).
+  - **Test whether account-policy auth-expiry bounds the IdP browser session** (possible Gap 5 mitigation; untested, so nothing relies on it until then).
 - Unknown `(issuer, sub)` → reject unless completing an **account link** (BYO).
 - Sessions with a `__Host-` cookie, CSRF synchronizer token, rotation, per-role lifetimes (configurable).
 - `IdentityAdmin` implementations: `kanidm`, `manual` (BYO) and `fake`.
@@ -288,6 +294,9 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 - Reset links use `ATLAS_IDP_PUBLIC_URL`. IdP backup files are mode 0600. No log line contains a client secret.
 - The IdP vhost rate-limits its authentication endpoints per client IP.
 - The Kanidm image is 1.12.x, pinned by digest.
+- Kanidm trusts `X-Forwarded-For` only from `atlas-proxy`, via `[http_client_address_info]` (never `trust_x_forward_for`). A test asserts that the rendered proxy config contains no `$proxy_add_x_forwarded_for`.
+- Kanidm's Immich client has strict redirect URIs, exactly the three documented in SELF_HOSTING.
+- The auth-expiry test result is recorded in ADR-001 (Gap 5): whether it bounds the IdP browser session, and which value applies across several groups.
 - The 5a work meets the acceptance criteria deferred from Phases 2–4 (bundled IdP starts healthy under the `bundled-idp` profile; IdP backup → restore; `atlas-init` never overwrites the CA/cert).
 
 **Tests:** `tests/kernel/identity/` covers validation fixtures from the spike, session lifecycle, rotation, CSRF, rate limits, linking, bootstrap-owner, break-glass, and idle/absolute expiry (frozen time). Plus an integration test against the bundled IdP.
