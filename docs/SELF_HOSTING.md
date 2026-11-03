@@ -255,10 +255,10 @@ Immich runs as its own stack (see Immich's docs). Atlas connects to it in two wa
 1. **SSO.** In Immich's OAuth settings, use the same IdP:
    - Bundled IdP: create the client with `docker compose exec atlas-api atlas-admin idp-add-client immich --redirect https://immich.example.com/auth/login --redirect https://immich.example.com/user-settings --redirect https://immich.example.com/api/oauth/mobile-redirect`. It prints the client secret once.
    - Issuer: `https://id.example.com/oauth2/openid/immich`.
-   - Signing algorithm: ES256.
+   - Signing algorithm: **ES256** (required). Immich's default, RS256, fails with "Failed to finish oauth".
    - Token endpoint auth: `client_secret_post`.
-   - Mobile redirect override: `https://immich.example.com/api/oauth/mobile-redirect`.
-   - These are the settings the spike validates. ADR-001 records the final values.
+   - Immich's mobile redirect override is **not** needed (tested with Immich 3.3.5 and Kanidm 1.12.0).
+   - These settings are validated in [ADR-001 → Spike results](adr/001-identity.md#spike-results).
 2. **Connector.** In the Atlas admin console → Connectors → Immich, enter the Immich URL. Health appears there, and family members with **Immich access** get a "Photos (Immich)" link.
    - With the bundled IdP, that toggle also controls whether the IdP lets them log in to Immich.
 
@@ -328,6 +328,6 @@ Again: stop with `docker compose down`, **never** `docker compose down -v`.
 | `external volume "atlas_pgdata" not found` | Run `./install.sh`, or `docker volume create atlas_pgdata` (and `atlas_idp`) |
 | Login loops or "invalid issuer" | `ATLAS_IDP_PUBLIC_URL` / `ATLAS_OIDC_ISSUER` doesn't exactly match the URL users reach, or the front proxy isn't forwarding `Host` |
 | Passkey enrolment fails | The IdP isn't on HTTPS with a trusted certificate, or its hostname changed since enrolment |
-| Immich mobile can't log in | Check the mobile redirect override, that the IdP hostname is reachable from outside, and that no Cloudflare Access policy covers the IdP or Immich |
+| Immich mobile can't log in | Check that Immich's signing algorithm is ES256, that the IdP hostname is reachable from outside, and that no Cloudflare Access policy covers the IdP or Immich |
 | Every request appears to come from one IP | `ATLAS_REAL_IP_HEADER` / `ATLAS_TRUSTED_PROXY_CIDRS` don't match your front proxy |
 | Locked out of the IdP entirely | Run `docker compose exec atlas-api atlas-admin break-glass --user <owner>` on the host, which gives a one-time 10-minute owner login |

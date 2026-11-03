@@ -1,7 +1,7 @@
 # ADR-001: Identity: bundled OIDC identity provider (Kanidm) by default, bring-your-own OIDC supported; Atlas is a relying party
 
-- **Status:** **Accepted (provisional).** Kanidm is the default IdP, pending the pre-Phase-1 spike ([PLAN-v1](../PLAN-v1.md), "Spike S"). Results are recorded [below](#spike-results).
-- **Date:** 2026-10-29. Revised the same day for generic self-hosting and the bundled IdP.
+- **Status:** **Accepted** (2026-11-03): Spike S outcome **(b)**, Kanidm confirmed as the bundled IdP with documented workarounds. Results and workarounds are recorded [below](#spike-results).
+- **Date:** 2026-10-29. Revised the same day for generic self-hosting and the bundled IdP. Spike results recorded 2026-11-03.
 - **Deciders:** project maintainer
 - **Related:** [AUDIT](../AUDIT.md) §3.1 (A1–A9), [ADR-002](002-authorization.md), [ADR-003](003-internet-exposure.md), [ADR-004](004-config-and-secrets.md), [SELF_HOSTING](../SELF_HOSTING.md)
 
@@ -23,7 +23,7 @@ Foundation has to deliver:
 - admin-driven credential resets **without a mail server**;
 - step-up re-authentication for admin actions;
 - remote access through whatever exposure the operator chooses (ADR-003);
-- **SSO into Immich**, including the Immich mobile app. Immich supports OIDC login, and its mobile app works through a redirect-URI override ([Immich OAuth docs](https://docs.immich.app/administration/oauth)).
+- **SSO into Immich**, including the Immich mobile app. Immich supports OIDC login ([Immich OAuth docs](https://docs.immich.app/administration/oauth)). With Kanidm, its mobile app worked in the spike without Immich's mobile redirect-URI override.
 
 Atlas is a public project that invites others to self-host. **Installation must stay one command** for an operator with no existing identity infrastructure. Operators who already run an OIDC provider should be able to use it.
 
@@ -90,9 +90,9 @@ Libraries: `authlib` (as OP and RP), `argon2-cffi`, `pyotp`, `py_webauthn`, plus
 | **Household UX: children/guests** | ✓ | ✓ | ✗ Need a passkey device | ✓ Per-group policy |
 | **Reset without mail** | Build it | ✓ Recovery link | ✓ One-time code | ✓ Reset token |
 | **TOTP / passkeys** | Build it | ✓ / ✓ | ✗ / ✓✓ | ✓ / ✓ |
-| **Immich SSO: web / mobile** | Build an OP | ✓ / ✓ | ✓ / ✓ | ✓ reported / **to verify in the spike** |
+| **Immich SSO: web / mobile** | Build an OP | ✓ / ✓ | ✓ / ✓ | ✓ / ✓ (spike, ES256 required) |
 | **API for the Atlas console** | Native | ✓✓ | ✓ | ✓ REST + service accounts |
-| **Step-up (`max_age`/`prompt=login`, `auth_time`)** | Build it | ✓ | To verify | **To verify in the spike** |
+| **Step-up (`max_age`/`prompt=login`, `auth_time`)** | Build it | ✓ | To verify | ✓ (spike) |
 | **Footprint when bundled** | — | Heavy | Tiny | Small |
 
 ## Decision
@@ -101,8 +101,8 @@ Libraries: `authlib` (as OP and RP), `argon2-cffi`, `pyotp`, `py_webauthn`, plus
 2. **Packaging P3.**
    - The default `docker-compose.yml` includes **Kanidm** as a bundled service, controlled by the compose profile `bundled-idp`, which is on by default. That keeps the install to one command.
    - **Bring-your-own OIDC** is a supported alternative: turn the profile off and set the issuer and client settings.
-3. **Kanidm is the bundled IdP, provisionally.** It's the only small, security-first option that offers both passkeys and password+TOTP, which lets credential policy follow the role. Pocket ID fails TOTP and the child/guest case. Authentik is too heavy to bundle by default (it remains a fine BYO choice). Building our own (A) is rejected.
-4. **The pre-Phase-1 spike** ([PLAN-v1](../PLAN-v1.md), "Spike S") validates Kanidm behind a reverse proxy. It covers web and mobile Immich login, TOTP, step-up and the admin API. If a **must-pass** item fails with no workaround, the bundled IdP switches to Authentik under a superseding ADR. The rest of Atlas is IdP-agnostic (plain OIDC plus a small `IdentityAdmin` adapter), so a switch changes only the adapter and the compose service.
+3. **Kanidm is the bundled IdP** (confirmed by Spike S, outcome (b)). It's the only small, security-first option that offers both passkeys and password+TOTP, which lets credential policy follow the role. Pocket ID fails TOTP and the child/guest case. Authentik is too heavy to bundle by default (it remains a fine BYO choice). Building our own (A) is rejected.
+4. **The pre-Phase-1 spike** ([PLAN-v1](../PLAN-v1.md), "Spike S") validates Kanidm behind a reverse proxy. It covers web and mobile Immich login, TOTP, step-up and the admin API. If a **must-pass** item fails with no workaround, the bundled IdP switches to Authentik under a superseding ADR. The rest of Atlas is IdP-agnostic (plain OIDC plus a small `IdentityAdmin` adapter), so a switch changes only the adapter and the compose service. The spike ran on 2026-11-03: no must-pass item failed without a workaround, so Kanidm stays ([outcome (b)](#spike-results)).
 
 ## How it works
 
@@ -182,7 +182,7 @@ These requirements come from how OIDC and passkeys work. Operators must plan for
    - The bundled proxy re-encrypts to Kanidm and verifies that CA.
    - Atlas's back-channel calls (discovery, token, JWKS, admin API) go to the internal URL and verify the same CA, while still validating `iss` against the public issuer.
    - Operators don't manage this certificate. It's rotated by re-running `atlas-init --rotate-idp-cert`.
-5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike.
+5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike. The spike confirmed that the real client IP reaches Kanidm through the proxy; option name to be recorded.
 6. **Hairpin access.** The Immich server (a separate stack) must reach the IdP's public URL server-to-server. If your network can't hairpin to its own public hostname, add a local DNS override that points that hostname to your reverse proxy. Details are in [SELF_HOSTING](../SELF_HOSTING.md).
 
 With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just needs to be HTTPS and reachable by browsers, Atlas and Immich.
@@ -206,39 +206,77 @@ With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just
 - With BYO, some console features (create/reset in the IdP) become manual.
 
 **Follow-ups:**
-- The spike (below).
+- The spike: done, see [Spike results](#spike-results).
 - An `IdentityAdmin` interface with `kanidm`, `manual` and `fake` implementations (`authentik` possible later).
 - `atlas-init` IdP bootstrap: create the Atlas OAuth2 client, the service account for the console, role groups and the first owner's reset token.
 - IdP backup and restore in [SELF_HOSTING](../SELF_HOSTING.md).
 
 ## Spike results
 
-**Status: _pending_.** The spike runs before Phase 1 ([PLAN-v1](../PLAN-v1.md), "Spike S"). Results are filled in here, with evidence: commands, screenshots, versions tested, and no hostnames or secrets.
+**Status: done (2026-11-03), outcome (b).** The spike was run by an installer on a throwaway stack outside this repo ([PLAN-v1](../PLAN-v1.md), "Spike S"). The results below are generic: no hostnames, addresses or secrets.
 
 - **Test setup:**
-  - Kanidm `<version>` and Immich server `<version>`.
-  - Immich mobile `<platform/version>`.
-  - Reverse proxy: the bundled nginx, re-encrypting to Kanidm's internal TLS.
-  - Public TLS in front: `<tunnel or TLS proxy>`.
-  - Two hostnames, for Atlas and the IdP.
+  - Kanidm 1.12.0 and Immich server v3.3.5.
+  - Immich iOS 3.3.5 (build 26).
+  - Reverse proxy: nginx 1.30.6, configured like `atlas-proxy`, re-encrypting to Kanidm's internal TLS with a private CA.
+  - Test relying party: Authlib 1.9.2 + joserfc 1.7.7.
+  - Two hostnames on a tester-controlled domain (not recorded).
+- **Evidence:** summarized in the table. The raw logs and screenshots are kept by the tester, outside the repo.
+- **No Kanidm escape hatch was needed:** no legacy crypto / RS256, PKCE not disabled, no Immich mobile redirect override.
 
 | # | Check | Must pass? | Result | Evidence / notes |
 |---|---|---|---|---|
-| 1 | Kanidm behind the reverse proxy: public origin over HTTPS, internal TLS re-encrypted, real client IP logged, lockout works per client | Must | _pending_ | |
-| 2 | Per-group credential policy: admin group requires passkey or MFA; child group allows password | Must | _pending_ | |
-| 3 | No-mail enrolment: admin-issued reset token → user enrols **password + TOTP**; separately a **passkey** | Must | _pending_ | |
-| 4 | **TOTP login** works end to end in the browser (and lockout after N bad codes) | Must | _pending_ | |
-| 5 | Atlas RP (authlib) with PKCE + ES256: login, ID-token validation, `nonce`, logout via end-session | Must | _pending_ | |
-| 6 | **Step-up:** `prompt=login`/`max_age=0` forces re-auth, and the returned `auth_time` is fresh and verifiable | Must | _pending_ | If not supported: fallback design or Authentik |
-| 7 | **Immich web** SSO via Kanidm (ES256, `client_secret_post`), access restricted by group | Must | _pending_ | |
-| 8 | **Immich mobile** SSO via Kanidm (Immich's mobile redirect override), from outside the LAN through the reverse proxy | Must | _pending_ | |
-| 9 | **Admin API** via service account: create/disable/enable person, set group membership, issue reset token | Must | _pending_ | |
-| 10 | Admin API: list and revoke a person's sessions | Should | _pending_ | If missing: Atlas revokes only its own sessions and documents the gap |
-| 11 | Backup and restore of the Kanidm volume (online backup or stopped-volume copy) | Must | _pending_ | |
-| 12 | `atlas-init` bootstrap is idempotent: re-running changes nothing, and an existing CA/cert is never overwritten | Must | _pending_ | |
-| 13 | Resource use (idle RSS, CPU) on a small host | Info | _pending_ | |
+| 1 | Kanidm behind the reverse proxy: public origin over HTTPS, internal TLS re-encrypted, real client IP reaches Kanidm (including from outside the LAN), soft-lock works **per account** | Must | **Pass** (check reworded) | Soft-lock backs off 1 s → 3 s → 5 s → 10 s; 100 failures in a day lock the account until 00:00 UTC. Lockout is per account, not per client, so the original "per client" wording didn't match Kanidm. See [Gap 1](#workarounds-and-design-consequences) |
+| 2 | Per-group credential policy: admin group requires passkey or MFA; child group allows password | Must | **Pass + config** | Admin forced to MFA, child password-only. Requires lowering the default policy of `idm_all_persons` from `mfa` to `any`, because Kanidm applies the strictest policy across a person's groups |
+| 3 | No-mail enrolment: admin-issued reset token → user enrols **password + TOTP**; separately a **passkey** | Must | **Pass** | The reset token is single-use |
+| 4 | **TOTP login** works end to end in the browser (4A); wrong TOTP codes do not lock the account, and repeated bad codes are throttled (4B) | Must | **4A Pass; 4B Pass** (check reworded) | 4B: ≥ 3 bad codes within one 30 s TOTP window block login until that window ends. Not configurable. See [Gap 4B](#workarounds-and-design-consequences) |
+| 5 | Atlas RP (authlib) with PKCE + ES256: login, ID-token validation, `nonce`, logout via end-session | Must | **Login Pass; logout Gap** | Login: PKCE S256, ES256, `iss`/`aud`/`nonce` correct. Logout: Kanidm 1.12.0 has no `end_session_endpoint`. Token revocation works (HTTP 200), but the browser's Kanidm session remains. See [Gap 5](#workarounds-and-design-consequences) |
+| 6 | **Step-up:** `prompt=login`/`max_age=0` forces re-auth, and the returned `auth_time` is fresh and verifiable | Must | **Pass** | `auth_time` is fresh |
+| 7 | **Immich web** SSO via Kanidm (ES256, `client_secret_post`), access restricted by group | Must | **Pass + config** | People outside the group are refused by Kanidm itself (no token issued). Immich must set signing algorithm ES256: its default RS256 fails with "Failed to finish oauth" |
+| 8 | **Immich mobile** SSO via Kanidm, from outside the LAN through the reverse proxy | Must | **Pass** | Immich iOS, no workaround and no mobile redirect override |
+| 9 | **Admin API** via service account: create/disable/enable person, set group membership, issue reset token | Must | **Pass** | A service account in `idm_people_admins` + `idm_group_admins` can create/disable/enable/delete persons, change groups and issue reset tokens over REST |
+| 10 | Admin API: list and revoke a person's sessions | Should | **Gap** | Built-in roles can't list or revoke other people's sessions (the API returns `200 []` rather than 403); there is no self-service session page. `account_expire` ends the Kanidm sessions and blocks new logins, but existing app sessions stay alive. Fallback adopted: Atlas revokes only its own sessions and documents the gap. See [Gap 10](#workarounds-and-design-consequences) |
+| 11 | Backup and restore of the Kanidm volume (online backup or stopped-volume copy) | Must | **Pass** | Offline backup/restore; a deleted account comes back with the same UUID; about 8–9 s of downtime |
+| 12 | `atlas-init` bootstrap is idempotent: re-running changes nothing, and an existing CA/cert is never overwritten | Must | **Pass** (spike's CA script) | Re-running doesn't overwrite. `atlas-init` must keep this guarantee when it's implemented (Phase 5a) |
+| 13 | Resource use (idle RSS, CPU) on a small host | Info | Info | Idle about 12–27 MiB RAM, about 0 % CPU, about 1.6 MB of data |
 
-**Outcome:** _pending_. One of:
+**Outcome: (b) Kanidm confirmed with documented workarounds.** ADR status → Accepted (2026-11-03). Options were:
 - (a) Kanidm confirmed: status → Accepted.
-- (b) Kanidm with documented workarounds: Accepted, with the workarounds listed here.
+- **(b) Kanidm with documented workarounds: Accepted, with the workarounds listed here.** ← chosen
 - (c) Superseded by ADR-00X (Authentik bundled).
+
+### Workarounds and design consequences
+
+**Gap 1: per-account lockout (row 1).** Because Kanidm's soft-lock is per account, anyone who knows a username can lock that person out on purpose.
+- The bundled proxy applies a per-client-IP `limit_req` on the IdP virtual host's authentication endpoints, in addition to Kanidm's own lockout and alongside the layered limits in [ADR-003 §5](003-internet-exposure.md#5-rate-limiting-layered).
+- This narrows the attack but can't remove it. It is documented as a **known limitation**.
+
+**Gap 4B: TOTP throttling instead of lockout (row 4).** Accepted. An attacker gets at most 3 guesses per 30 s window, and the password is still required.
+
+**Gap 5: no end-session endpoint (row 5).** Atlas logout:
+1. deletes the Atlas session;
+2. revokes the IdP tokens it holds (RFC 7009);
+3. if the IdP's discovery document advertises `end_session_endpoint` (BYO IdPs, or a future Kanidm), redirects there with `id_token_hint` and `post_logout_redirect_uri`;
+4. otherwise shows a logged-out page that says the user is **still signed in at the IdP** and links to the IdP's own sign-in page.
+
+Interactive Atlas login sends `prompt=login` **by default**, with a setting to turn it off (its name is chosen in Phase 5). A lingering IdP session on a shared device therefore never silently signs the next person in to Atlas.
+Known limitation: Immich may still reuse a lingering IdP session.
+
+**Gap 10: no session listing or revocation for other people (row 10).** The fallback in the row note is adopted:
+- Atlas revokes only its own sessions.
+- Disabling a user ends their Atlas sessions and sets the Kanidm `account_expire`, which ends their Kanidm sessions and blocks new logins.
+- Atlas sessions also **re-validate with the IdP periodically** (refresh-token grant; a failure ends the session), so disables done outside Atlas take effect within that interval.
+
+**Other consequences for Phase 5:**
+- **Role-group invariant.** Every person is in exactly one role group that carries a credential policy. `idm_all_persons` is lowered to `any` only after the role groups exist, and the `kanidm` adapter refuses a person without a role group.
+- **Step-up never uses `amr`.** `amr`/`acr` are null in Kanidm's tokens, so step-up relies on `auth_time` plus the IdP's group policy.
+- **Groups by UUID.** The `groups` claim contains both UUIDs and names (including the built-in `idm_*` groups), so Atlas maps groups by UUID.
+- **Identity key.** Usernames arrive as `user@<idp-host>`. Atlas keys on `(issuer, sub)` as before; Kanidm's prefer-short-username setting is per client and can be set if a short name is needed for display.
+- **Reset links.** The CLI builds reset links from its internal URI, so Atlas builds them from `ATLAS_IDP_PUBLIC_URL`.
+- **Admin API quirks.** A GET for a deleted account returns `200 null`: treat it as not found. A weak password returns 422: show the reason to the user.
+- **UX notes:** TOTP is asked before the password; TOTP enrolment warns about authenticator apps that only support SHA1; the first login per client shows a consent page; a disabled account is refused at the username step, which reveals that it exists.
+- **Operations:**
+  - Kanidm backups are gzip, but restore needs a `.gz` file name.
+  - Backup files are written 0644 and contain all secrets, so `atlas-backup` must write them 0600.
+  - `kanidm system oauth2 get` prints the client secret, so the bootstrap must never log its output.
+- **Upgrades.** Re-run this checklist on every Kanidm upgrade, and in particular check whether `end_session_endpoint` appears.

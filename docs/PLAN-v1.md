@@ -19,7 +19,7 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 | # | Phase | Main outcome | AUDIT ids closed |
 |---|---|---|---|
 | 0 | Emergency patches on legacy `main` | Today's code is no longer trivially exploitable; CI green | A1, O1–O3, O5, O7, I1, F1 |
-| **S** | **Identity spike** (decision gate for ADR-001) | Kanidm validated behind a reverse proxy: Immich web + mobile, TOTP, step-up, admin API. Results in ADR-001 | — |
+| **S** | **Identity spike** (decision gate for ADR-001) — **done, outcome (b)** | Kanidm validated behind a reverse proxy: Immich web + mobile, TOTP, step-up, admin API. Results in ADR-001 | — |
 | 1 | Repo hygiene & CI baseline | Lockfiles, gitleaks, lint, required CI; legacy isolated | I5, §3.5 hygiene |
 | 2 | Config & secrets | Fail-closed `Settings`; `atlas-init` secret generation; env files only | A1 (structural), §3.5 |
 | 3 | Database & migrations | Postgres, kernel baseline, `atlas-migrate`, external volumes, backup/restore | §1.5, §2.2 |
@@ -72,6 +72,10 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 
 ## Spike S: identity validation (before Phase 1)
 
+> **Done (2026-11-03): outcome (b), Kanidm 1.12.0 confirmed with documented workarounds.** Results, gaps and workarounds are in [ADR-001 → Spike results](adr/001-identity.md#spike-results).
+> - The test stack ran outside this repo, so `deploy/spike/` was not created. The Phase 5 fixtures are built from the parameters recorded in ADR-001.
+> - The work deferred until Spike S (Phases 2–4 below) is unblocked and is delivered as the first Phase 5 PR, **5a**.
+
 **Why here:** ADR-001 makes Kanidm the bundled IdP *provisionally*. Phases 2–5 (secrets layout, `atlas-init` bootstrap, proxy vhosts and internal TLS, the RP and the `IdentityAdmin` adapter) all depend on it. Validating it before Phase 1 means no platform code gets built on an unverified choice.
 
 **Setup:**
@@ -99,12 +103,12 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 - If (c), Phases 2–5 are re-scoped before Phase 1 starts.
 
 **Artifacts:**
-- `deploy/spike/` holds the stack definition, bootstrap commands and test client, with placeholders only.
-- The ID-token validation cases become fixtures for Phase 5.
+- ~~`deploy/spike/` holds the stack definition, bootstrap commands and test client, with placeholders only.~~ Not created: the test stack ran outside the repo.
+- The ID-token validation cases become fixtures for Phase 5, built from the parameters recorded in ADR-001.
 
 ## Phase 1: Repo hygiene & CI baseline
 
-> **Sequencing note (owner-approved):** Phase 1 started before Spike S. It holds no identity code, so it doesn't build anything on the unverified IdP choice. Phases 2–4 can also do their IdP-agnostic parts before the spike. Their Kanidm-specific parts (the `idp/` secrets and internal CA, the IdP admin token, the bundled-IdP compose service and vhost, the IdP backup) and all of Phase 5 wait for the spike's outcome.
+> **Sequencing note (owner-approved):** Phase 1 started before Spike S. It holds no identity code, so it doesn't build anything on the unverified IdP choice. Phases 2–4 can also do their IdP-agnostic parts before the spike. Their Kanidm-specific parts (the `idp/` secrets and internal CA, the IdP admin token, the bundled-IdP compose service and vhost, the IdP backup) and all of Phase 5 wait for the spike's outcome. *(Update 2026-11-03: Spike S is done, outcome (b). Those parts are delivered in Phase 5a.)*
 
 **Work:**
 - `git mv core frontend tests alembic → legacy/…` (paths only). The legacy suite keeps running.
@@ -151,7 +155,7 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 - `tests/cli/test_init.py`: generation, modes, idempotence, no-overwrite.
 - Container test: a placeholder key means exit ≠ 0.
 
-**Deferred until Spike S** (each one is marked `TODO(spike-s)` in the code):
+**Deferred until Spike S** (each one is marked `TODO(spike-s)` in the code). **Unblocked** (Spike S done, outcome (b)); delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"):
 - `atlas-init` generating the `idp/` directory: the internal CA, its key, and the server certificate and key.
 - `ATLAS_IDP_ADMIN_TOKEN`, and `ATLAS_OIDC_CLIENT_SECRET` for the bundled IdP. Both are written after the IdP bootstrap, which may issue the client secret itself.
 - `ATLAS_IDP_PUBLIC_URL`, the default `ATLAS_OIDC_ISSUER` derived from it, and `ATLAS_IDENTITY_ADMIN=kanidm`.
@@ -199,7 +203,7 @@ Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_S
 
 Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
-**Deferred until Spike S** (marked `TODO(spike-s)` in the code):
+**Deferred until Spike S** (marked `TODO(spike-s)` in the code). **Unblocked** (Spike S done, outcome (b)); delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"):
 - the bundled IdP's backup and restore in `atlas-admin backup`/`restore`;
 - its external volume `${ATLAS_IDP_VOLUME}` in compose.
 
@@ -214,7 +218,7 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 > - **Owner decisions** (recorded in ADR-003 §1):
 >   - `/health` answers on any `Host`;
 >   - the Docker gateway is trusted only for a loopback bind; any other bind requires `ATLAS_TRUSTED_PROXY_CIDRS`.
-> - **Deferred until Spike S** (`TODO(spike-s)`): the bundled Kanidm service (`bundled-idp` profile), its volume, its virtual host and internal-TLS re-encryption, and creating the IdP volume in `install.sh`.
+> - **Deferred until Spike S** (`TODO(spike-s)`), now **unblocked** (Spike S done, outcome (b)) and delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"): the bundled Kanidm service (`bundled-idp` profile), its volume, its virtual host and internal-TLS re-encryption, and creating the IdP volume in `install.sh`.
 > - **Later phases:** the app reading `X-Real-IP` for app-level rate limits (Phase 5); the real SPA (Phase 7); publishing images (Phase 10).
 
 **Work:**
@@ -241,12 +245,26 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
 ## Phase 5: Identity & sessions (ADR-001, ADR-003)
 
+**Delivery:** the first PR is **5a: bundled IdP service, volume, vhost, internal CA, backup**. It delivers everything Phases 2–4 deferred until Spike S (`TODO(spike-s)`). The RP, sessions and the adapters follow.
+
 **Work:**
-- OIDC RP using the spike's validated parameters:
+- OIDC RP using the spike's validated parameters ([ADR-001 → Spike results](adr/001-identity.md#spike-results)):
   - login, callback, logout, step-up;
   - JWKS cache;
   - strict `iss`/`aud`/`exp`/`nonce`/`auth_time`;
   - internal back-channel URL + CA for the bundled IdP.
+- Consequences of the spike ([ADR-001 → Workarounds](adr/001-identity.md#workarounds-and-design-consequences)):
+  - **Logout:** delete the Atlas session and revoke the IdP tokens (RFC 7009). Use `end_session_endpoint` (with `id_token_hint`/`post_logout_redirect_uri`) only if discovery advertises it; otherwise the logged-out page says the user is still signed in at the IdP and links to the IdP's sign-in page.
+  - **`prompt=login` by default** on interactive login, with a setting to turn it off (name chosen in this phase).
+  - **Periodic IdP re-validation** of Atlas sessions (refresh-token grant; a failure ends the session).
+  - **Disable:** ends the Atlas sessions and sets the Kanidm `account_expire`.
+  - **Role-group invariant:** every person is in exactly one role group with a credential policy. `idm_all_persons` is lowered to `any` only after the role groups exist, and the `kanidm` adapter refuses a person without a role group.
+  - **Groups mapped by UUID**, never by name. Step-up relies on `auth_time` + IdP group policy, never `amr`.
+  - **Reset links** built from `ATLAS_IDP_PUBLIC_URL`, not the CLI's internal URI. A deleted-account GET (`200 null`) is treated as not found; a weak-password 422 shows its reason.
+  - **IdP backups written 0600** by `atlas-backup` (Kanidm writes 0644 and they contain all secrets); restore handles the `.gz` name.
+  - **Never log the client secret**: the bootstrap never logs `kanidm system oauth2 get` output.
+  - **`limit_req` per client IP on the IdP vhost's authentication endpoints** (Kanidm's lockout is per account).
+  - **Kanidm 1.12.x pinned by digest.** Re-run the spike checklist on upgrades.
 - Unknown `(issuer, sub)` → reject unless completing an **account link** (BYO).
 - Sessions with a `__Host-` cookie, CSRF synchronizer token, rotation, per-role lifetimes (configurable).
 - `IdentityAdmin` implementations: `kanidm`, `manual` (BYO) and `fake`.
@@ -264,6 +282,13 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 - Cookie flags correct. No token in `localStorage` or any response body.
 - CSRF enforced. N+1-th auth callback → 429.
 - Break-glass works once, expires, and is audited.
+- Disabling a person in the IdP ends their Atlas session within the re-validation interval (integration test against the bundled IdP).
+- Logout revokes the IdP tokens; with no `end_session_endpoint`, the logged-out page says the IdP session remains. Interactive login sends `prompt=login` unless the setting turns it off.
+- The `kanidm` adapter refuses a person without exactly one role group; groups are mapped by UUID.
+- Reset links use `ATLAS_IDP_PUBLIC_URL`. IdP backup files are mode 0600. No log line contains a client secret.
+- The IdP vhost rate-limits its authentication endpoints per client IP.
+- The Kanidm image is 1.12.x, pinned by digest.
+- The 5a work meets the acceptance criteria deferred from Phases 2–4 (bundled IdP starts healthy under the `bundled-idp` profile; IdP backup → restore; `atlas-init` never overwrites the CA/cert).
 
 **Tests:** `tests/kernel/identity/` covers validation fixtures from the spike, session lifecycle, rotation, CSRF, rate limits, linking, bootstrap-owner, break-glass, and idle/absolute expiry (frozen time). Plus an integration test against the bundled IdP.
 
