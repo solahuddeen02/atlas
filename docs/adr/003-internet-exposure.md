@@ -114,8 +114,8 @@ The IdP's account policy enforces these minimums. With the bundled IdP, `atlas-i
 **Revocation:**
 - Users can list and end their own sessions.
 - Admins can end all sessions for a user.
-- Disabling a user, changing their role, or reaching a guest's `expires_at` ends all of that user's Atlas sessions immediately, and asks the IdP to end its sessions too where the adapter supports it (spike item 10).
-- Logout deletes the session and calls the IdP's end-session endpoint.
+- Disabling a user, changing their role, or reaching a guest's `expires_at` ends all of that user's Atlas sessions immediately. Atlas can't revoke a person's IdP sessions (spike item 10). Disabling a user also sets the Kanidm `account_expire` (bundled IdP), which ends that person's IdP sessions and blocks new logins. Atlas sessions also re-validate with the IdP periodically, so disables done in the IdP take effect ([ADR-001, Gap 10](001-identity.md#workarounds-and-design-consequences)).
+- Logout deletes the session and revokes the IdP tokens. It uses the IdP's end-session endpoint only where discovery advertises one; otherwise the logged-out page says the user is still signed in at the IdP. Interactive login sends `prompt=login` by default ([ADR-001, Gap 5](001-identity.md#workarounds-and-design-consequences)).
 - Every request checks the session row, so revocation is immediate. That closes A3.
 
 **Rotation:**

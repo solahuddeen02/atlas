@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4. The parts of Phases 2–4 that depend on the bundled identity provider wait for Spike S.
+There are no releases yet. This section covers PLAN Phases 0–4 and Spike S. The parts of Phases 2–4 that depend on the bundled identity provider are scheduled for Phase 5a.
 
 ### Added
 
@@ -35,6 +35,7 @@ There are no releases yet. This section covers PLAN Phases 0–4. The parts of P
   - `/health/ready` for trusted peers only;
   - multi-stage, multi-arch (amd64/arm64), non-root images, and `deploy/install.sh`.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
+- Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
 ### Changed
 
