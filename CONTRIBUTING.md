@@ -13,6 +13,7 @@ Today's app lives in [`legacy/`](legacy/) and only gets security fixes.
 | `deploy/` | The compose stack (from Phases 2–4) |
 | `legacy/` | Today's app: `core/`, `frontend/`, `tests/`, `alembic/`, its Dockerfile and compose file |
 | `scripts/ci/` | Checks run by CI |
+| `CLAUDE.md` | Working rules for Claude Code (AI coding assistant) sessions; points to these docs |
 
 ## Setup
 
