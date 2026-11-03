@@ -253,10 +253,14 @@ If you already run Authentik, Keycloak, Kanidm, Authelia, Pocket ID or similar:
 Immich runs as its own stack (see Immich's docs). Atlas connects to it in two ways:
 
 1. **SSO.** In Immich's OAuth settings, use the same IdP:
-   - Bundled IdP: create the client with `docker compose exec atlas-api atlas-admin idp-add-client immich --redirect https://immich.example.com/auth/login --redirect https://immich.example.com/user-settings --redirect https://immich.example.com/api/oauth/mobile-redirect`. It prints the client secret once.
+   - Bundled IdP: create the client with `docker compose exec atlas-api atlas-admin idp-add-client immich --redirect https://immich.example.com/auth/login --redirect https://immich.example.com/user-settings --redirect app.immich:///oauth-callback`. It prints the client secret once.
+   - The IdP client is confidential, with strict redirect URIs. Its redirect URIs are exactly:
+     - `https://immich.example.com/auth/login`;
+     - `https://immich.example.com/user-settings`;
+     - `app.immich:///oauth-callback` (the mobile app; Kanidm accepts it as an opaque origin).
    - Issuer: `https://id.example.com/oauth2/openid/immich`.
-   - Signing algorithm: **ES256** (required). Immich's default, RS256, fails with "Failed to finish oauth".
-   - Token endpoint auth: `client_secret_post`.
+   - Signing algorithm: **ES256** (required, confirmed). Immich's default, RS256, fails with "Failed to finish oauth".
+   - Token endpoint auth: `client_secret_post` (confirmed).
    - Immich's mobile redirect override is **not** needed (tested with Immich 3.3.5 and Kanidm 1.12.0).
    - These settings are validated in [ADR-001 → Spike results](adr/001-identity.md#spike-results).
 2. **Connector.** In the Atlas admin console → Connectors → Immich, enter the Immich URL. Health appears there, and family members with **Immich access** get a "Photos (Immich)" link.
