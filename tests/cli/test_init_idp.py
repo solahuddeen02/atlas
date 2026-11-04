@@ -197,7 +197,7 @@ def test_server_toml(secrets_dir: Path) -> None:
 def test_server_toml_follows_the_settings(secrets_dir: Path) -> None:
     run_init(secrets_dir, idp=OPTS)
     changed = IdpOptions(
-        public_url="https://login.example.net:8443",
+        public_url="https://login.example.com:8443",
         front_subnet="10.250.1.16/28",
         backup_schedule="*/5 * * * * * *",
         backup_versions=3,
@@ -205,8 +205,8 @@ def test_server_toml_follows_the_settings(secrets_dir: Path) -> None:
     report = run_init(secrets_dir, idp=changed)
     config = tomllib.loads((secrets_dir / "idp/server.toml").read_text())
     assert (config["domain"], config["origin"]) == (
-        "login.example.net",
-        "https://login.example.net:8443",
+        "login.example.com",
+        "https://login.example.com:8443",
     )
     assert config["http_client_address_info"] == {"x-forward-for": ["10.250.1.16/28"]}
     assert config["online_backup"]["schedule"] == "*/5 * * * * * *"
@@ -283,7 +283,8 @@ def test_missing_data_volume_is_an_error(secrets_dir: Path, tmp_path: Path) -> N
 def test_no_key_material_printed(
     secrets_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.home.arpa")
+    monkeypatch.setenv("ATLAS_ENV", "development")
+    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.example.com")
     assert main(["init", "--secrets-dir", str(secrets_dir)]) == 0
     out = capsys.readouterr().out
     assert "idp-ca/ca.key" in out
@@ -302,7 +303,8 @@ def test_cli_idp_flags_need_the_bundled_idp(
 
 
 def test_cli_rotate(secrets_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.home.arpa")
+    monkeypatch.setenv("ATLAS_ENV", "development")
+    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.example.com")
     assert main(["init", "--secrets-dir", str(secrets_dir)]) == 0
     ca = (secrets_dir / "idp-ca/ca.key").read_bytes()
     chain = (secrets_dir / "idp/chain.pem").read_bytes()
@@ -314,8 +316,9 @@ def test_cli_rotate(secrets_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cli_invalid_idp_settings(
     secrets_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.home.arpa")
-    monkeypatch.setenv("ATLAS_IDP_FRONT_SUBNET", "8.8.8.0/28")
+    monkeypatch.setenv("ATLAS_ENV", "development")
+    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.example.com")
+    monkeypatch.setenv("ATLAS_IDP_FRONT_SUBNET", "100.64.0.0/28")
     assert main(["init", "--secrets-dir", str(secrets_dir)]) == 2
     assert "ATLAS_IDP_FRONT_SUBNET: must be a private range" in capsys.readouterr().err
     assert not secrets_dir.exists()

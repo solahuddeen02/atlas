@@ -354,7 +354,7 @@ def test_db_init_settings_defaults() -> None:
 
 # Bundled IdP (Phase 5a; ADR-001, ADR-004)
 
-IDP_URL = "https://id.home.arpa"
+IDP_URL = "https://id.example.com"
 
 
 def test_byo_needs_an_issuer_and_manages_identities_by_hand(make_settings: MakeSettings) -> None:
@@ -380,10 +380,10 @@ def test_bundled_idp_defaults_issuer_and_identity_admin(make_settings: MakeSetti
 def test_explicit_issuer_and_identity_admin_win(make_settings: MakeSettings) -> None:
     settings = make_settings(
         ATLAS_IDP_PUBLIC_URL=IDP_URL,
-        ATLAS_OIDC_ISSUER="https://sso.home.arpa/application/o/atlas",
+        ATLAS_OIDC_ISSUER="https://sso.example.com/application/o/atlas",
         ATLAS_IDENTITY_ADMIN="manual",
     )
-    assert settings.oidc_issuer == "https://sso.home.arpa/application/o/atlas"
+    assert settings.oidc_issuer == "https://sso.example.com/application/o/atlas"
     assert settings.identity_admin == "manual"
     assert "ATLAS_IDENTITY_ADMIN:" in problems_for(make_settings, ATLAS_IDENTITY_ADMIN="ldap")
 
@@ -396,18 +396,21 @@ def test_empty_idp_url_means_byo(make_settings: MakeSettings) -> None:
 @pytest.mark.parametrize(
     ("url", "message"),
     [
-        ("http://id.home.arpa", "must be an absolute https:// URL"),
-        ("id.home.arpa", "must be an absolute https:// URL"),
-        ("https://id.home.arpa/kanidm", "must be an origin with no path"),
-        ("https://id.home.arpa/?x=1", "must be an origin with no path"),
-        ("https://user:pw@id.home.arpa", "must not contain a user name or password"),
+        ("http://id.example.com", "must be an absolute https:// URL"),
+        ("id.example.com", "must be an absolute https:// URL"),
+        ("https://id.example.com/kanidm", "must be an origin with no path"),
+        ("https://id.example.com/?x=1", "must be an origin with no path"),
+        ("https://user:pw@id.example.com", "must not contain a user name or password"),
         ("https://bad_host;x", "invalid host name"),
-        ("https://atlas.home.arpa", "different host name than ATLAS_PUBLIC_URL"),
-        ("https://ATLAS.home.arpa:8443", "different host name than ATLAS_PUBLIC_URL"),
+        ("https://atlas.example.com", "different host name than ATLAS_PUBLIC_URL"),
+        ("https://ATLAS.example.com:8443", "different host name than ATLAS_PUBLIC_URL"),
     ],
 )
 def test_idp_url_rules(make_settings: MakeSettings, url: str, message: str) -> None:
-    assert message in problems_for(make_settings, ATLAS_IDP_PUBLIC_URL=url)
+    text = problems_for(
+        make_settings, ATLAS_PUBLIC_URL="https://atlas.example.com", ATLAS_IDP_PUBLIC_URL=url
+    )
+    assert message in text
 
 
 def test_idp_url_placeholder_only_outside_production(make_settings: MakeSettings) -> None:
@@ -420,10 +423,12 @@ def test_idp_url_placeholder_only_outside_production(make_settings: MakeSettings
 
 
 def test_idp_url_keeps_a_non_default_port(make_settings: MakeSettings) -> None:
-    assert make_settings(ATLAS_IDP_PUBLIC_URL="https://id.home.arpa:8443").idp_public_url == (
-        "https://id.home.arpa:8443"
+    assert make_settings(ATLAS_IDP_PUBLIC_URL="https://id.example.com:8443").idp_public_url == (
+        "https://id.example.com:8443"
     )
-    assert make_settings(ATLAS_IDP_PUBLIC_URL="https://id.home.arpa:443").idp_public_url == IDP_URL
+    assert (
+        make_settings(ATLAS_IDP_PUBLIC_URL="https://id.example.com:443").idp_public_url == IDP_URL
+    )
 
 
 def test_oidc_client_id_is_a_path_segment(make_settings: MakeSettings) -> None:
@@ -486,7 +491,7 @@ def test_init_settings_idp_defaults() -> None:
         ("10.249.73.5/28", "IPv4 network in CIDR form"),  # host bits set
         ("not-a-cidr", "IPv4 network in CIDR form"),
         ("fd00::/64", "IPv4 network in CIDR form"),
-        ("8.8.8.0/28", "private range"),
+        ("100.64.0.0/28", "private range"),
         ("0.0.0.0/0", "private range"),
         ("127.0.0.0/28", "private range"),
         ("10.0.0.0/8", "between /16 and /29"),
