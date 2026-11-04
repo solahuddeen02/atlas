@@ -11,6 +11,9 @@
 #   ATLAS_MAX_BODY_SIZE        default 10m
 #   ATLAS_RATE_LIMIT_AUTH      default 10r/m   (/api/auth/)
 #   ATLAS_RATE_LIMIT_API       default 20r/s   (/api/)
+#   ATLAS_IDP_PUBLIC_URL       bundled IdP only, e.g. https://id.example.com (own host)
+#   ATLAS_RATE_LIMIT_IDP_AUTH  default 30r/m   (credential POSTs to the IdP, per client IP)
+#   ATLAS_IDP_CA_FILE          default /etc/atlas-idp-ca/ca.pem (the internal CA certificate)
 #
 # Client-IP trust (ADR-003 §1): loopback is always trusted. With Docker's userland
 # proxy, every connection to a published port arrives from the bridge gateway, so:
@@ -18,8 +21,12 @@
 #                        reverse proxy must be on this host to reach the port);
 #   - non-loopback bind: the gateway is NOT trusted implicitly; ATLAS_TRUSTED_PROXY_CIDRS
 #                        must be set explicitly, or the proxy refuses to start.
-# TODO(spike-s): the IdP virtual host for ATLAS_IDP_PUBLIC_URL, with re-encryption to
-# the bundled IdP verified against the internal CA.
+#
+# Bundled IdP (ADR-001; only when ATLAS_IDP_PUBLIC_URL is set): a virtual host for the
+# IdP's own hostname that re-encrypts to https://idp:8443, verifying the certificate
+# against the internal CA (atlas-idp-init writes it). X-Forwarded-For is overwritten
+# with the verified client address: Kanidm reads the first entry, so it must never be
+# a client-supplied chain.
 
 set -euf  # -f: no globbing, so a "*" in a setting is never expanded
 
@@ -28,6 +35,9 @@ CONF_DIR="${ATLAS_PROXY_CONF_DIR:-/etc/nginx/conf.d}"
 OUT="$CONF_DIR/atlas.conf"
 INC="$CONF_DIR/atlas-proxy.inc"
 UPSTREAM="${ATLAS_API_UPSTREAM:-atlas-api:8000}"
+IDP_INC="$CONF_DIR/atlas-idp-proxy.inc"
+IDP_UPSTREAM="${ATLAS_IDP_UPSTREAM:-idp:8443}"
+IDP_CA="${ATLAS_IDP_CA_FILE:-/etc/atlas-idp-ca/ca.pem}"
 WEB_ROOT=/usr/share/atlas/web
 
 die() {
@@ -56,8 +66,37 @@ scheme="${url%%://*}"
 rest="${url#*://}"
 hostport="${rest%%/*}"
 host="${hostport%%:*}"
-matches "$host" '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
-    || die "ATLAS_PUBLIC_URL has an invalid host name"
+host_re='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+matches "$host" "$host_re" || die "ATLAS_PUBLIC_URL has an invalid host name"
+
+# --- Bundled IdP URL (optional) --------------------------------------------------
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+idp_url="${ATLAS_IDP_PUBLIC_URL:-}"
+idp_host=""
+if [ -n "$idp_url" ]; then
+    case "$idp_url" in
+        https://*) ;;
+        *) die "ATLAS_IDP_PUBLIC_URL must be an https:// URL (the IdP is only served over HTTPS)" ;;
+    esac
+    idp_rest="${idp_url#https://}"
+    idp_hostport="${idp_rest%%/*}"
+    idp_path="${idp_rest#"$idp_hostport"}"
+    case "$idp_path" in
+        "" | /) ;;
+        *) die "ATLAS_IDP_PUBLIC_URL must have no path: the IdP needs its own host name" ;;
+    esac
+    case "$idp_hostport" in
+        *@*) die "ATLAS_IDP_PUBLIC_URL must not contain a user name or password" ;;
+    esac
+    idp_host="${idp_hostport%%:*}"
+    matches "$idp_host" "$host_re" || die "ATLAS_IDP_PUBLIC_URL has an invalid host name"
+    [ "$(lower "$idp_host")" != "$(lower "$host")" ] \
+        || die "ATLAS_IDP_PUBLIC_URL must use a different host name than ATLAS_PUBLIC_URL" \
+            "(the IdP needs its own origin; ADR-001)"
+    [ -r "$IDP_CA" ] \
+        || die "ATLAS_IDP_PUBLIC_URL is set but the internal CA certificate $IDP_CA is" \
+            "missing (atlas-idp-init writes it; is the bundled-idp profile enabled?)"
+fi
 
 # --- Other settings ------------------------------------------------------------
 header="${ATLAS_REAL_IP_HEADER:-X-Forwarded-For}"
@@ -68,6 +107,9 @@ rate_auth="${ATLAS_RATE_LIMIT_AUTH:-10r/m}"
 matches "$rate_auth" '^[0-9]+r/[sm]$' || die "ATLAS_RATE_LIMIT_AUTH must look like 10r/m"
 rate_api="${ATLAS_RATE_LIMIT_API:-20r/s}"
 matches "$rate_api" '^[0-9]+r/[sm]$' || die "ATLAS_RATE_LIMIT_API must look like 20r/s"
+rate_idp_auth="${ATLAS_RATE_LIMIT_IDP_AUTH:-30r/m}"
+matches "$rate_idp_auth" '^[0-9]+r/[sm]$' \
+    || die "ATLAS_RATE_LIMIT_IDP_AUTH must look like 30r/m"
 
 # --- Trusted peers -------------------------------------------------------------
 bind="${ATLAS_BIND_ADDRESS:-127.0.0.1}"
@@ -200,6 +242,49 @@ EOF
     }
 }
 EOF
+    if [ -n "$idp_host" ]; then
+        cat <<EOF
+
+# --- Bundled IdP (ADR-001) ---------------------------------------------------------
+upstream atlas_idp {
+    server $IDP_UPSTREAM;
+    keepalive 8;
+}
+
+# Credential submissions only (POST), per client IP: Kanidm's own soft-lock is per
+# account, so this limits guessing across accounts from one address (ADR-001, Gap 1).
+# Kanidm v1.12.0 routes: /ui/login/* (server/core/src/https/views/mod.rs:64-95, under
+# /ui: https/mod.rs:316), /v1/auth and /v1/reauth (https/v1.rs:3451, 3454). Discovery, JWKS
+# and the token endpoint stay unthrottled: Immich calls them server-to-server.
+map \$request_method \$atlas_idp_auth_key {
+    POST \$binary_remote_addr;
+    default "";
+}
+limit_req_zone \$atlas_idp_auth_key zone=atlas_idp_auth:10m rate=$rate_idp_auth;
+
+server {
+    listen 8080;
+    server_name $idp_host;
+    access_log /dev/stdout atlas_json;
+
+    location ^~ /ui/login/ {
+        limit_req zone=atlas_idp_auth burst=15 nodelay;
+        include $IDP_INC;
+    }
+    location = /v1/auth {
+        limit_req zone=atlas_idp_auth burst=15 nodelay;
+        include $IDP_INC;
+    }
+    location = /v1/reauth {
+        limit_req zone=atlas_idp_auth burst=15 nodelay;
+        include $IDP_INC;
+    }
+    location / {
+        include $IDP_INC;
+    }
+}
+EOF
+    fi
 } > "$OUT"
 
 cat > "$INC" <<EOF
@@ -215,7 +300,37 @@ proxy_set_header X-Forwarded-Host \$host;
 proxy_read_timeout 60s;
 EOF
 
+if [ -n "$idp_host" ]; then
+    cat > "$IDP_INC" <<EOF
+# Re-encrypt to the bundled IdP and verify its certificate against the internal CA.
+proxy_pass https://atlas_idp;
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host \$host;
+proxy_set_header X-Forwarded-Proto https;
+# Overwritten, never appended: Kanidm takes the FIRST X-Forwarded-For entry.
+proxy_set_header X-Forwarded-For \$remote_addr;
+proxy_ssl_verify on;
+proxy_ssl_verify_depth 2;
+proxy_ssl_trusted_certificate $IDP_CA;
+proxy_ssl_name idp;
+proxy_ssl_server_name on;
+proxy_ssl_protocols TLSv1.2 TLSv1.3;
+proxy_ssl_session_reuse on;
+proxy_read_timeout 60s;
+EOF
+    [ -s "$IDP_INC" ] || die "could not write the nginx configuration to $CONF_DIR"
+else
+    rm -f "$IDP_INC"
+fi
+
 [ -s "$OUT" ] && [ -s "$INC" ] || die "could not write the nginx configuration to $CONF_DIR"
 
-echo "atlas-proxy: serving $host; trusted peers:$(printf ' %s' $trusted)"
-nginx -t -q || die "generated nginx configuration is invalid"
+if [ -n "$idp_host" ]; then
+    echo "atlas-proxy: serving $host and the IdP at $idp_host;" \
+        "trusted peers:$(printf ' %s' $trusted)"
+else
+    echo "atlas-proxy: serving $host; trusted peers:$(printf ' %s' $trusted)"
+fi
+nginx -t -q || die "generated nginx configuration is invalid" \
+    "${idp_host:+(with the IdP: is the idp service running? check COMPOSE_PROFILES)}"

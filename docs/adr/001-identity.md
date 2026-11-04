@@ -182,11 +182,14 @@ These requirements come from how OIDC and passkeys work. Operators must plan for
    - The bundled proxy re-encrypts to Kanidm and verifies that CA.
    - Atlas's back-channel calls (discovery, token, JWKS, admin API) go to the internal URL and verify the same CA, while still validating `iss` against the public issuer.
    - Operators don't manage this certificate. It's rotated by re-running `atlas-init --rotate-idp-cert`.
+   - *As built (Phase 5a):* the init step is the `atlas-idp-init` service (profile `bundled-idp`), which runs `atlas-admin init`. The certificate names `idp` (atlas-proxy's `proxy_ssl_name`) and `localhost` (Kanidm's own `healthcheck -v`), and `chain.pem` holds the certificate followed by the CA. The CA private key is mounted into no running service, and `--rotate-idp-cert` never rotates the CA ([SELF_HOSTING](../SELF_HOSTING.md#the-bundled-identity-provider)).
 5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike. The spike confirmed that the real client IP reaches Kanidm through the proxy. The configuration used:
    - Kanidm 1.12.0, server config `version = "2"`: `[http_client_address_info]` with `x-forward-for = ["<proxy address>", ...]` trusts `X-Forwarded-For` only from the listed peers.
    - Do **not** use the legacy `trust_x_forward_for = true`: in 1.12.0 it trusts the header from **all** peers.
    - Kanidm reads the **first** `X-Forwarded-For` entry, so the proxy must **overwrite** the header with the verified client address (nginx `proxy_set_header X-Forwarded-For $remote_addr;`), never append to it (`$proxy_add_x_forwarded_for`). Otherwise clients can spoof their IP.
    - PROXY protocol was not tested.
+   - *As built (Phase 5a):* `x-forward-for` accepts CIDR ranges in Kanidm 1.12.0 (kanidm v1.12.0 `server/core/src/config.rs:187-188`, tested at `:1129-1146`). Kanidm trusts the subnet of the internal `idp-front` network (`ATLAS_IDP_FRONT_SUBNET`), which only atlas-proxy and idp join, so the proxy needs no fixed address.
+   - *As built (Phase 5a):* Kanidm's configuration comes only from the `server.toml` that `atlas-idp-init` renders. `KANIDM_*` environment variables override that file (and `KANIDM_TRUST_X_FORWARDED_FOR=true` silently trusts every peer), so the compose file sets none.
 6. **Hairpin access.** The Immich server (a separate stack) must reach the IdP's public URL server-to-server. If your network can't hairpin to its own public hostname, add a local DNS override that points that hostname to your reverse proxy. Details are in [SELF_HOSTING](../SELF_HOSTING.md).
 
 With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just needs to be HTTPS and reachable by browsers, Atlas and Immich.

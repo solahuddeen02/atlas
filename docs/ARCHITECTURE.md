@@ -26,13 +26,15 @@ Module boundaries are enforced in code (import contracts, the SDK and per-module
 
 | Service | Role | Published port | Lifetime |
 |---|---|---|---|
-| `atlas-init` | Generates missing secrets and the internal IdP CA/cert, creates DB roles, bootstraps the bundled IdP (ADR-004, ADR-001). Idempotent | — | One-shot, every `up` |
+| `atlas-init` | Generates missing secrets (ADR-004). Idempotent | — | One-shot, every `up` |
+| `atlas-db-init` | Creates the DB roles, database and schema (ADR-005) | — | One-shot, every `up` |
 | `postgres` | PostgreSQL 17, data in an **external** named volume (ADR-005) | — | Long-running |
-| `idp` | Bundled Kanidm. Compose profile `bundled-idp`, on by default. Internal TLS only | — | Long-running |
+| `atlas-idp-init` | Bundled IdP (profile `bundled-idp`): writes the internal CA, the idp TLS key/certificate and Kanidm's `server.toml`, and prepares the idp volume and backup dirs. Root, no network. The IdP bootstrap (OAuth2 clients, service account, groups) follows in Phase 5b | — | One-shot, every `up` |
+| `idp` | Bundled Kanidm 1.12, pinned by digest. Profile `bundled-idp`, on by default. uid 10002, read-only root filesystem, internal TLS only, online backups into `ATLAS_BACKUP_DIR/idp-online/` | — | Long-running |
 | `atlas-migrate` | `atlas-admin migrate`: lock → pre-migration dump → `alembic upgrade heads` → seed | — | One-shot, every `up` |
 | `atlas-api` | FastAPI kernel + enabled modules, as `atlas_app` (DML only) | — | Long-running |
 | `atlas-proxy` | nginx: serves the SPA, proxies `/api` and `/health`, re-encrypts to `idp`, applies security headers and rate limits | **`${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`**, the only one | Long-running |
-| `atlas-backup` | `pg_dump` + IdP backup into `ATLAS_BACKUP_DIR` | — | Run on demand or by the operator's scheduler |
+| `atlas-backup` | `pg_dump` + a copy of Kanidm's newest online backup into `ATLAS_BACKUP_DIR` | — | Run on demand or by the operator's scheduler |
 | `cloudflared` | Optional Cloudflare Tunnel connector (profile `tunnel`, off by default). Forwards public hostnames to `atlas-proxy` over the compose network | — | Long-running, when enabled |
 
 ```
@@ -43,15 +45,26 @@ Module boundaries are enforced in code (import contracts, the SDK and per-module
   │  atlas-proxy ─┬─ Host = Atlas URL ─▶ SPA (static)                                     │
   │               │                    └▶ atlas-api ──▶ postgres  (external volume)      │
   │               └─ Host = IdP URL ───▶ idp (Kanidm, internal TLS) ──▶ idp volume        │
-  │  atlas-init (one-shot) · atlas-migrate (one-shot) · atlas-backup (on demand)          │
+  │                      (over idp-front)       ▲ (idp-back, Phase 5b) atlas-api           │
+  │  atlas-init · atlas-db-init · atlas-migrate · atlas-idp-init (one-shot) · atlas-backup │
   └───────────────────────────────────────────────────────────────────────────────────────┘
   Immich (separate stack, its own hostname) ◀─ OIDC ─ idp          atlas-api ─ connector (HTTP) ─▶ Immich
 ```
 
+**Networks:**
+
+| Network | Members | Notes |
+|---|---|---|
+| `default` | every service except `idp` | atlas-proxy's only route and gateway; the trusted-peer rules of ADR-003 §1 are computed on it |
+| `idp-front` | atlas-proxy, idp | `internal: true`, subnet `ATLAS_IDP_FRONT_SUBNET`. The only network Kanidm trusts `X-Forwarded-For` from; atlas-proxy overwrites that header with the verified client address |
+| `idp-back` | atlas-api, idp | `internal: true`. The OIDC back-channel (Phase 5b). Not trusted by Kanidm |
+
+Kanidm's configuration is only the `server.toml` that `atlas-idp-init` renders: the compose file sets no `KANIDM_*` variables, because they would override it ([SELF_HOSTING → bundled identity provider](SELF_HOSTING.md#the-bundled-identity-provider)).
+
 **With bring-your-own OIDC** ([ADR-001](adr/001-identity.md)):
 - the `bundled-idp` profile is off, so there's no `idp` service and no IdP vhost;
 - `atlas-api` talks to the external issuer;
-- `atlas-init` skips IdP bootstrap.
+- `atlas-idp-init` doesn't run, so there's no internal CA either. atlas-proxy still joins the (unused) `idp-front` network.
 
 ## 2. Code layout and module boundaries
 

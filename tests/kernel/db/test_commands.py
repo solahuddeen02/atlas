@@ -286,3 +286,34 @@ def test_uow_commits_and_rolls_back(migrated_db: PgTestDb) -> None:
             assert list(keys) == ["a"]
     finally:
         engine.dispose()
+
+
+def test_backup_includes_the_bundled_idp(migrated_db: PgTestDb) -> None:
+    # Phase 5a: the newest Kanidm online backup rides along, 0600, with its metadata.
+    import gzip
+
+    settings = migrated_db.settings.model_copy(
+        update={"idp_public_url": "https://id.example.com", "idp_kanidm_series": "1.12"}
+    )
+    online = settings.backup_dir / "idp-online"
+    online.mkdir(parents=True)
+    name = "backup-2026-10-01T02:30:00Z.json.gz"
+    with gzip.open(online / name, "wt") as fh:
+        json.dump({"version": "1.12", "db_d_uuid": "d0d0", "entries": []}, fh)
+    result = run_backup(settings, now=lambda: datetime(2026, 10, 1, 3, 0, tzinfo=UTC))
+    manifest = json.loads((result.path / "manifest.json").read_text())
+    assert manifest["idp"]["source"] == name
+    assert manifest["idp"]["kanidm_version"] == "1.12"
+    assert manifest["idp"]["domain_uuid"] == "d0d0"
+    assert manifest["idp"]["age_seconds"] == 1800
+    assert stat.S_IMODE((result.path / "idp.json.gz").stat().st_mode) == 0o600
+    assert result.warnings == []
+
+
+def test_backup_without_idp_backup_warns_but_succeeds(migrated_db: PgTestDb) -> None:
+    settings = migrated_db.settings.model_copy(update={"idp_public_url": "https://id.example.com"})
+    result = run_backup(settings)
+    manifest = json.loads((result.path / "manifest.json").read_text())
+    assert manifest["idp"] is None
+    assert (result.path / "atlas.dump").is_file()
+    assert result.warnings and "the IdP is NOT in this backup" in result.warnings[0]

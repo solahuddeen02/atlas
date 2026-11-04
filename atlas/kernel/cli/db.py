@@ -70,11 +70,19 @@ def cmd_backup(args: argparse.Namespace) -> int:
     print(f"backup written: {result.path}")
     for path in result.pruned:
         print(f"pruned: {path}")
+    for warning in result.warnings:
+        print(f"atlas-admin backup: warning: {warning}", file=sys.stderr)
     return 0
 
 
 def cmd_restore(args: argparse.Namespace) -> int:
-    from atlas.kernel.db.backup import BackupError, run_restore
+    from atlas.kernel.db.backup import (
+        BackupError,
+        check_idp_restore,
+        idp_restore_steps,
+        run_restore,
+        stage_idp_restore,
+    )
     from atlas.kernel.db.postgres import PgToolError
 
     if not args.yes:
@@ -86,13 +94,26 @@ def cmd_restore(args: argparse.Namespace) -> int:
         return 1
     try:
         settings = load_database_settings()
+        # The IdP's version is checked first: a mismatch changes nothing at all.
+        idp_plan = check_idp_restore(settings, args.source)
         revisions = run_restore(settings, args.source)
+        staged = stage_idp_restore(settings, args.source) if idp_plan.include else None
     except ConfigError as exc:
         return _config_error("restore", exc)
     except (BackupError, PgToolError) as exc:
         print(f"atlas-admin restore: {exc}", file=sys.stderr)
         return 1
     print(f"restored {args.source} at revision {', '.join(revisions)}")
+    for warning in idp_plan.warnings:
+        print(f"atlas-admin restore: warning: {warning}", file=sys.stderr)
+    if staged is not None:
+        print(
+            "\nNow restore the IdP (offline; Kanidm only restores into the same version).\n"
+            "In deploy/, run:"
+        )
+        for step in idp_restore_steps(staged):
+            print(f"  {step}")
+        print(f"Then delete {staged} (it holds every IdP secret), and start atlas-api again.")
     return 0
 
 

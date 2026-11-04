@@ -8,8 +8,9 @@ this file only points to them and adds working rules. If this file and a doc dis
 A self-hosted home platform for one household: one front door (OIDC login), family roles and permissions,
 an admin console, and a module registry. Pre-1.0. Status per phase: `README.md` → Status.
 **Spike S is done** (ADR-001 outcome (b): Kanidm is the bundled IdP, with the workarounds recorded there).
-**Next: Phase 5a** (bundled IdP service, volume, vhost, internal CA, backup — the work marked `TODO(spike-s)`),
-then the rest of Phase 5. Follow ADR-001 → "Workarounds and design consequences".
+**Phase 5a is done** (bundled IdP service, volume, networks, vhost, internal CA, backup).
+**Next: Phase 5b**: the IdP bootstrap (the work marked `TODO(phase-5b)`), then the RP, sessions and adapters.
+Follow ADR-001 → "Workarounds and design consequences".
 
 ## Read first
 | Need | Doc |

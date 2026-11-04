@@ -350,3 +350,180 @@ def test_db_init_settings_defaults() -> None:
     )
     assert settings.postgres_superuser == "postgres"
     assert settings.postgres_password_file == Path("/run/secrets/postgres/password")
+
+
+# Bundled IdP (Phase 5a; ADR-001, ADR-004)
+
+IDP_URL = "https://id.example.com"
+
+
+def test_byo_needs_an_issuer_and_manages_identities_by_hand(make_settings: MakeSettings) -> None:
+    settings = make_settings()
+    assert settings.idp_public_url is None
+    assert not settings.bundled_idp
+    assert settings.identity_admin == "manual"
+    message = problems_for(make_settings, ATLAS_OIDC_ISSUER=None)
+    assert "ATLAS_OIDC_ISSUER: is required unless ATLAS_IDP_PUBLIC_URL is set" in message
+
+
+def test_bundled_idp_defaults_issuer_and_identity_admin(make_settings: MakeSettings) -> None:
+    settings = make_settings(ATLAS_OIDC_ISSUER=None, ATLAS_IDP_PUBLIC_URL=IDP_URL + "/")
+    assert settings.idp_public_url == IDP_URL
+    assert settings.oidc_issuer == f"{IDP_URL}/oauth2/openid/atlas"
+    assert settings.identity_admin == "kanidm"
+    other = make_settings(
+        ATLAS_OIDC_ISSUER=None, ATLAS_IDP_PUBLIC_URL=IDP_URL, ATLAS_OIDC_CLIENT_ID="atlas-dev"
+    )
+    assert other.oidc_issuer == f"{IDP_URL}/oauth2/openid/atlas-dev"
+
+
+def test_explicit_issuer_and_identity_admin_win(make_settings: MakeSettings) -> None:
+    settings = make_settings(
+        ATLAS_IDP_PUBLIC_URL=IDP_URL,
+        ATLAS_OIDC_ISSUER="https://sso.example.com/application/o/atlas",
+        ATLAS_IDENTITY_ADMIN="manual",
+    )
+    assert settings.oidc_issuer == "https://sso.example.com/application/o/atlas"
+    assert settings.identity_admin == "manual"
+    assert "ATLAS_IDENTITY_ADMIN:" in problems_for(make_settings, ATLAS_IDENTITY_ADMIN="ldap")
+
+
+def test_empty_idp_url_means_byo(make_settings: MakeSettings) -> None:
+    # docker-compose.yml passes ${ATLAS_IDP_PUBLIC_URL:-}, i.e. "" in BYO mode.
+    assert make_settings(ATLAS_IDP_PUBLIC_URL="").bundled_idp is False
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://id.example.com", "must be an absolute https:// URL"),
+        ("id.example.com", "must be an absolute https:// URL"),
+        ("https://id.example.com/kanidm", "must be an origin with no path"),
+        ("https://id.example.com/?x=1", "must be an origin with no path"),
+        ("https://user:pw@id.example.com", "must not contain a user name or password"),
+        ("https://bad_host;x", "invalid host name"),
+        ("https://atlas.example.com", "different host name than ATLAS_PUBLIC_URL"),
+        ("https://ATLAS.example.com:8443", "different host name than ATLAS_PUBLIC_URL"),
+    ],
+)
+def test_idp_url_rules(make_settings: MakeSettings, url: str, message: str) -> None:
+    text = problems_for(
+        make_settings, ATLAS_PUBLIC_URL="https://atlas.example.com", ATLAS_IDP_PUBLIC_URL=url
+    )
+    assert message in text
+
+
+def test_idp_url_placeholder_only_outside_production(make_settings: MakeSettings) -> None:
+    message = problems_for(
+        make_settings, ATLAS_ENV="production", ATLAS_IDP_PUBLIC_URL="https://id.example.com"
+    )
+    assert "ATLAS_IDP_PUBLIC_URL: still uses a placeholder domain" in message
+    dev = make_settings(ATLAS_ENV="development", ATLAS_IDP_PUBLIC_URL="https://id.example.com")
+    assert dev.idp_public_url == "https://id.example.com"
+
+
+def test_idp_url_keeps_a_non_default_port(make_settings: MakeSettings) -> None:
+    assert make_settings(ATLAS_IDP_PUBLIC_URL="https://id.example.com:8443").idp_public_url == (
+        "https://id.example.com:8443"
+    )
+    assert (
+        make_settings(ATLAS_IDP_PUBLIC_URL="https://id.example.com:443").idp_public_url == IDP_URL
+    )
+
+
+def test_oidc_client_id_is_a_path_segment(make_settings: MakeSettings) -> None:
+    assert "ATLAS_OIDC_CLIENT_ID:" in problems_for(make_settings, ATLAS_OIDC_CLIENT_ID="a/b")
+
+
+def test_kanidm_series(make_settings: MakeSettings) -> None:
+    assert make_settings(ATLAS_IDP_KANIDM_SERIES="1.12").idp_kanidm_series == "1.12"
+    assert "ATLAS_IDP_KANIDM_SERIES:" in problems_for(
+        make_settings, ATLAS_IDP_KANIDM_SERIES="1.12.0"
+    )
+
+
+def init_problems(**values: str) -> str:
+    """Problems reported by load_init_settings() for these environment variables."""
+    from atlas.kernel.config import load_init_settings
+
+    mp = pytest.MonkeyPatch()
+    try:
+        for name, value in values.items():
+            mp.setenv(name, value)
+        with pytest.raises(ConfigError) as exc:
+            load_init_settings()
+    finally:
+        mp.undo()
+    return str(exc.value)
+
+
+def test_init_settings_idp_defaults() -> None:
+    from atlas.kernel.config import (
+        DEFAULT_IDP_BACKUP_SCHEDULE,
+        DEFAULT_IDP_FRONT_SUBNET,
+        InitSettings,
+    )
+
+    byo = InitSettings(_env_file=None)
+    assert not byo.bundled_idp
+    bundled = InitSettings(
+        _env_file=None, ATLAS_ENV="development", ATLAS_IDP_PUBLIC_URL="https://id.example.com"
+    )
+    assert bundled.bundled_idp
+    assert bundled.idp_front_subnet == DEFAULT_IDP_FRONT_SUBNET == "10.249.73.0/28"
+    assert bundled.idp_backup_schedule == DEFAULT_IDP_BACKUP_SCHEDULE == "0 * * * *"
+    assert bundled.idp_backup_versions == 24
+    # Compose passes empty strings for unset settings.
+    empty = InitSettings(
+        _env_file=None,
+        ATLAS_IDP_PUBLIC_URL="",
+        ATLAS_IDP_FRONT_SUBNET="",
+        ATLAS_IDP_BACKUP_SCHEDULE="",
+    )
+    assert not empty.bundled_idp
+    assert empty.idp_front_subnet == DEFAULT_IDP_FRONT_SUBNET
+
+
+@pytest.mark.parametrize(
+    ("subnet", "message"),
+    [
+        ("10.249.73.0", "between /16 and /29"),
+        ("10.249.73.5/28", "IPv4 network in CIDR form"),  # host bits set
+        ("not-a-cidr", "IPv4 network in CIDR form"),
+        ("fd00::/64", "IPv4 network in CIDR form"),
+        ("100.64.0.0/28", "private range"),
+        ("0.0.0.0/0", "private range"),
+        ("127.0.0.0/28", "private range"),
+        ("10.0.0.0/8", "between /16 and /29"),
+        ("10.249.73.0/30", "between /16 and /29"),
+    ],
+)
+def test_init_settings_front_subnet_rules(subnet: str, message: str) -> None:
+    text = init_problems(ATLAS_IDP_FRONT_SUBNET=subnet)
+    assert "ATLAS_IDP_FRONT_SUBNET: must be" in text and message in text
+
+
+@pytest.mark.parametrize("schedule", ["0 * * * *", "*/5 * * * * * *", "15 3 * * Mon"])
+def test_init_settings_backup_schedule_accepted(schedule: str) -> None:
+    from atlas.kernel.config import InitSettings
+
+    assert InitSettings(_env_file=None, ATLAS_IDP_BACKUP_SCHEDULE=schedule).idp_backup_schedule
+
+
+@pytest.mark.parametrize("schedule", ["@daily", "* * *", '0 * * * *"; x', "0 * * * * *"])
+def test_init_settings_backup_schedule_rejected(schedule: str) -> None:
+    assert "ATLAS_IDP_BACKUP_SCHEDULE: must be a cron schedule" in init_problems(
+        ATLAS_IDP_BACKUP_SCHEDULE=schedule
+    )
+
+
+def test_init_settings_idp_needs_its_own_host() -> None:
+    text = init_problems(
+        ATLAS_ENV="development",
+        ATLAS_PUBLIC_URL="https://atlas.example.com",
+        ATLAS_IDP_PUBLIC_URL="https://atlas.example.com",
+    )
+    assert "ATLAS_IDP_PUBLIC_URL: must use a different host name" in text
+    assert "ATLAS_IDP_PUBLIC_URL: still uses a placeholder" in init_problems(
+        ATLAS_IDP_PUBLIC_URL="https://id.example.com"
+    )
