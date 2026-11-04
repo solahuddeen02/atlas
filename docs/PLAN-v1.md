@@ -155,7 +155,7 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 - `tests/cli/test_init.py`: generation, modes, idempotence, no-overwrite.
 - Container test: a placeholder key means exit ≠ 0.
 
-**Deferred until Spike S** (each one is marked `TODO(spike-s)` in the code). **Unblocked** (Spike S done, outcome (b)); delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"):
+**Deferred until Spike S** (each one was marked with a spike-s TODO in the code). **Delivered in Phase 5a**, except `ATLAS_IDP_ADMIN_TOKEN` and the generated `ATLAS_OIDC_CLIENT_SECRET`, which need the IdP bootstrap and are marked `TODO(phase-5b)`:
 - `atlas-init` generating the `idp/` directory: the internal CA, its key, and the server certificate and key.
 - `ATLAS_IDP_ADMIN_TOKEN`, and `ATLAS_OIDC_CLIENT_SECRET` for the bundled IdP. Both are written after the IdP bootstrap, which may issue the client secret itself.
 - `ATLAS_IDP_PUBLIC_URL`, the default `ATLAS_OIDC_ISSUER` derived from it, and `ATLAS_IDENTITY_ADMIN=kanidm`.
@@ -203,7 +203,7 @@ Until then, `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_S
 
 Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
-**Deferred until Spike S** (marked `TODO(spike-s)` in the code). **Unblocked** (Spike S done, outcome (b)); delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"):
+**Deferred until Spike S** (was marked with a spike-s TODO in the code). **Delivered in Phase 5a**:
 - the bundled IdP's backup and restore in `atlas-admin backup`/`restore`;
 - its external volume `${ATLAS_IDP_VOLUME}` in compose.
 
@@ -218,7 +218,7 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 > - **Owner decisions** (recorded in ADR-003 §1):
 >   - `/health` answers on any `Host`;
 >   - the Docker gateway is trusted only for a loopback bind; any other bind requires `ATLAS_TRUSTED_PROXY_CIDRS`.
-> - **Deferred until Spike S** (`TODO(spike-s)`), now **unblocked** (Spike S done, outcome (b)) and delivered as the first Phase 5 PR ("5a: bundled IdP service, volume, vhost, internal CA, backup"): the bundled Kanidm service (`bundled-idp` profile), its volume, its virtual host and internal-TLS re-encryption, and creating the IdP volume in `install.sh`.
+> - **Deferred until Spike S** (spike-s TODOs), **delivered in Phase 5a**: the bundled Kanidm service (`bundled-idp` profile), its volume, its virtual host and internal-TLS re-encryption, and creating the IdP volume in `install.sh`.
 > - **Later phases:** the app reading `X-Real-IP` for app-level rate limits (Phase 5); the real SPA (Phase 7); publishing images (Phase 10).
 
 **Work:**
@@ -245,7 +245,20 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
 ## Phase 5: Identity & sessions (ADR-001, ADR-003)
 
-**Delivery:** the first PR is **5a: bundled IdP service, volume, vhost, internal CA, backup**. It delivers everything Phases 2–4 deferred until Spike S (`TODO(spike-s)`). The RP, sessions and the adapters follow.
+**Delivery:** the first PR is **5a: bundled IdP service, volume, vhost, internal CA, backup**. It delivers everything Phases 2–4 deferred until Spike S (the spike-s TODOs). The RP, sessions and the adapters follow.
+
+> **Progress: 5a done.** No spike-s TODO marker remains; the IdP bootstrap work left is marked `TODO(phase-5b)`.
+> - **Delivered** (see [SELF_HOSTING → bundled identity provider](SELF_HOSTING.md#the-bundled-identity-provider)):
+>   - `idp` (kanidm/server 1.12.0 by digest; uid 10002; read-only; healthcheck with `-v`) and `atlas-idp-init` under the `bundled-idp` profile;
+>   - the external volume `${ATLAS_IDP_VOLUME:-atlas_idp}`, created by `install.sh` with that profile;
+>   - internal networks `idp-front` (atlas-proxy + idp, subnet `ATLAS_IDP_FRONT_SUBNET`) and `idp-back` (atlas-api + idp);
+>   - the internal CA (never rotated, mounted by no running service), the idp certificate (`--rotate-idp-cert`) and Kanidm's `server.toml`;
+>   - the IdP vhost in atlas-proxy: verified re-encryption, `X-Forwarded-For` overwritten, per-IP `limit_req` on Kanidm's credential endpoints;
+>   - IdP data in `atlas-backup` (0600, Kanidm version, domain UUID, age) and in `atlas-admin restore` (version check, offline steps);
+>   - settings `ATLAS_IDP_PUBLIC_URL`, `ATLAS_IDP_FRONT_SUBNET`, `ATLAS_IDENTITY_ADMIN` and the issuer default.
+> - **Open design point resolved:** Kanidm 1.12.0 accepts CIDR ranges in `x-forward-for` (kanidm v1.12.0 `server/core/src/config.rs:187-188`, `IpCidr`, with the unit test `assert_cidr_parsing_behaviour` at `:1129-1146`). So atlas-proxy needs no fixed address. Kanidm trusts the whole `idp-front` subnet, which only atlas-proxy and idp join.
+> - **Moved to 5b**, because they need the IdP bootstrap (an OAuth2 client, a person): Kanidm's Immich client with strict redirect URIs, and the account-policy auth-expiry test (Gap 5).
+> - **5b next:** the IdP bootstrap (Atlas OAuth2 client and its generated secret, console service account and `ATLAS_IDP_ADMIN_TOKEN`, role groups and policies), then the RP, sessions and the `IdentityAdmin` adapters.
 
 **Work:**
 - OIDC RP using the spike's validated parameters ([ADR-001 → Spike results](adr/001-identity.md#spike-results)):
@@ -268,9 +281,9 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 - 5a, from the Spike S follow-up ([ADR-001](adr/001-identity.md#the-bundled-idps-hostname-and-tls-requirements) item 5, Gap 5):
   - **Kanidm client address:** `[http_client_address_info]` `x-forward-for`, limited to `atlas-proxy`. Never the legacy `trust_x_forward_for` key.
   - **The IdP vhost overwrites `X-Forwarded-For` with `$remote_addr`**, as `atlas-proxy` already does in `deploy/nginx/40-atlas-render.sh`. Never `$proxy_add_x_forwarded_for`.
-  - **Open design point:** the trusted list needs `atlas-proxy`'s address on the internal network. Either give it a fixed address on a fixed internal subnet, or verify that Kanidm accepts a CIDR there. Don't assume CIDR support.
-  - **Kanidm's Immich client:** strict redirect URIs, exactly the three in [SELF_HOSTING → Connecting Immich](SELF_HOSTING.md#connecting-immich).
-  - **Test whether account-policy auth-expiry bounds the IdP browser session** (possible Gap 5 mitigation; untested, so nothing relies on it until then).
+  - ~~**Open design point:** fixed address or CIDR.~~ Resolved in 5a: Kanidm accepts a CIDR, and it trusts the `idp-front` subnet (see Progress above).
+  - **Kanidm's Immich client** (5b, with the bootstrap): strict redirect URIs, exactly the three in [SELF_HOSTING → Connecting Immich](SELF_HOSTING.md#connecting-immich).
+  - **Test whether account-policy auth-expiry bounds the IdP browser session** (5b; possible Gap 5 mitigation; untested, so nothing relies on it until then).
 - Unknown `(issuer, sub)` → reject unless completing an **account link** (BYO).
 - Sessions with a `__Host-` cookie, CSRF synchronizer token, rotation, per-role lifetimes (configurable).
 - `IdentityAdmin` implementations: `kanidm`, `manual` (BYO) and `fake`.

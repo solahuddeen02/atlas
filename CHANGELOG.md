@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4 and Spike S. The parts of Phases 2–4 that depend on the bundled identity provider are scheduled for Phase 5a.
+There are no releases yet. This section covers PLAN Phases 0–4, Spike S and Phase 5a (the bundled identity provider's infrastructure).
 
 ### Added
 
@@ -34,6 +34,14 @@ There are no releases yet. This section covers PLAN Phases 0–4 and Spike S. Th
   - unknown hosts dropped, security headers, rate and body-size limits, and fail-closed client-IP trust;
   - `/health/ready` for trusted peers only;
   - multi-stage, multi-arch (amd64/arm64), non-root images, and `deploy/install.sh`.
+- **Bundled identity provider: infrastructure** (Phase 5a, [ADR-001](docs/adr/001-identity.md)):
+  - the `idp` service (Kanidm 1.12.0, pinned by digest) under the `bundled-idp` profile, on by default. It runs as uid 10002 with a read-only root filesystem, and its healthcheck verifies TLS;
+  - `atlas-idp-init`, which writes an internal CA, the IdP's TLS certificate and Kanidm's `server.toml`. The CA key is mounted into no running service. `--rotate-idp-cert` issues a new IdP certificate from the same CA;
+  - internal networks `idp-front` (atlas-proxy + idp; the only source Kanidm trusts `X-Forwarded-For` from) and `idp-back` (atlas-api + idp, for Phase 5b);
+  - an IdP virtual host in atlas-proxy for `ATLAS_IDP_PUBLIC_URL`: TLS re-encryption verified against the internal CA, the client address overwritten into `X-Forwarded-For`, and per-IP rate limits on Kanidm's credential endpoints;
+  - `atlas-backup` copies Kanidm's newest online backup into each backup set. `atlas-admin restore` checks the Kanidm version and prints the offline IdP restore steps;
+  - settings `ATLAS_IDP_PUBLIC_URL`, `ATLAS_IDP_FRONT_SUBNET`, `ATLAS_IDP_BACKUP_SCHEDULE`, `ATLAS_IDP_BACKUP_VERSIONS`, `ATLAS_RATE_LIMIT_IDP_AUTH` and `ATLAS_IDENTITY_ADMIN`. The OIDC issuer defaults from the IdP URL;
+  - not yet: the IdP bootstrap (OAuth2 clients, service account, groups) and login (Phase 5b). Until then `ATLAS_OIDC_CLIENT_SECRET` is still set by hand.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -69,6 +77,11 @@ There are no releases yet. This section covers PLAN Phases 0–4 and Spike S. Th
 ### Upgrade notes
 
 - **New platform:** nothing to upgrade from, since nothing has been released yet. For a first install, follow [SELF_HOSTING](docs/SELF_HOSTING.md). Parts of it, such as login, don't work yet.
+- **If you run a pre-release checkout from before Phase 5a**, the bundled IdP is now on by default:
+  - **New settings** in `deploy/.env` (see `.env.example`): `COMPOSE_PROFILES=bundled-idp`, `ATLAS_IDP_PUBLIC_URL` (its own HTTPS hostname, different from `ATLAS_PUBLIC_URL`), `ATLAS_IDP_VOLUME`, `ATLAS_IDP_FRONT_SUBNET` (default `10.249.73.0/28`; change it if it collides with one of your networks), `ATLAS_IDP_BACKUP_SCHEDULE`, `ATLAS_IDP_BACKUP_VERSIONS` and `ATLAS_RATE_LIMIT_IDP_AUTH`. To stay on bring-your-own OIDC, leave out `bundled-idp` and `ATLAS_IDP_PUBLIC_URL`;
+  - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
+  - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
+  - `ATLAS_OIDC_CLIENT_SECRET` must still be set by hand until Phase 5b.
 - **Legacy app:**
   - it now runs from `legacy/` (`cd legacy` before any command);
   - `SECRET_KEY` must be set to a strong value, or the app won't start; tokens signed with an old placeholder key no longer work;
