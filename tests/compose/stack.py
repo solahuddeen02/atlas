@@ -22,6 +22,8 @@ COMPOSE_FILE = DEPLOY / "docker-compose.yml"
 FAILING_MIGRATION_OVERLAY = DEPLOY / "compose.test-failing-migration.yml"
 IMAGE = "atlas:local"
 PUBLIC_HOST = "atlas.test.invalid"
+IDP_HOST = "id.test.invalid"
+BUNDLED_IDP = "bundled-idp"
 
 # Every wait is bounded. A hit limit fails the test with a clear message and the
 # stack's state and logs (Stack.diagnostics), instead of hanging the CI job.
@@ -37,6 +39,8 @@ DIAGNOSTIC_SERVICES = (
     "atlas-db-init",
     "atlas-init",
     "postgres",
+    "atlas-idp-init",
+    "idp",
 )
 
 # Stacks alive right now, for the per-test watchdog (tests/compose/conftest.py).
@@ -73,6 +77,11 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def random_idp_subnet() -> str:
+    """A private /28 per stack: two stacks run at once, and their idp-front must differ."""
+    return f"10.250.{secrets.randbelow(256)}.{16 * secrets.randbelow(16)}/28"
+
+
 @dataclass
 class Stack:
     workdir: Path
@@ -81,13 +90,28 @@ class Stack:
     extra_env: dict[str, str] = field(default_factory=dict)
     create_volume: bool = True
     port: int = field(default_factory=free_port)
+    # The bundled IdP (profile bundled-idp). Off by default: BYO keeps most tests fast.
+    idp: bool = False
+    # Kanidm's online backup schedule; None keeps the production default.
+    idp_backup_schedule: str | None = None
+    idp_subnet: str = field(default_factory=random_idp_subnet)
 
     def __post_init__(self) -> None:
         ACTIVE.append(self)
         self.secrets_dir = self.workdir / "secrets"
         self.backup_dir = self.workdir / "backups"
         self.volume = f"{self.project}_pgdata"
+        self.idp_volume = f"{self.project}_idp"
         self.env_file = self.workdir / "stack.env"
+        idp_env = []
+        if self.idp:
+            idp_env = [
+                f"COMPOSE_PROFILES={BUNDLED_IDP}",
+                f"ATLAS_IDP_PUBLIC_URL=https://{IDP_HOST}",
+                f"ATLAS_IDP_VOLUME={self.idp_volume}",
+            ]
+            if self.idp_backup_schedule:
+                idp_env.append(f'ATLAS_IDP_BACKUP_SCHEDULE="{self.idp_backup_schedule}"')
         self.env_file.write_text(
             "\n".join(
                 [
@@ -100,13 +124,17 @@ class Stack:
                     "ATLAS_BIND_ADDRESS=127.0.0.1",
                     f"ATLAS_HTTP_PORT={self.port}",
                     "TZ=UTC",
+                    # Every stack has idp-front (atlas-proxy is on it even in BYO mode).
+                    f"ATLAS_IDP_FRONT_SUBNET={self.idp_subnet}",
+                    *idp_env,
                     *(f"{k}={v}" for k, v in self.extra_env.items()),
                 ]
             )
             + "\n"
         )
-        # The API needs OIDC settings that atlas-init doesn't generate (Phase 5 /
-        # TODO(spike-s)). Put them in app.env first; init only appends missing keys.
+        # The API needs OIDC settings that init doesn't generate yet (TODO(phase-5b):
+        # the IdP bootstrap writes the client secret). Put them in app.env first; init
+        # only appends missing keys.
         self.secrets_dir.mkdir(mode=0o700)
         atlas_dir = self.secrets_dir / "atlas"
         atlas_dir.mkdir(mode=0o700)
@@ -116,12 +144,17 @@ class Stack:
         )
         if self.create_volume:
             run(["docker", "volume", "create", self.volume])
+            if self.idp:
+                run(["docker", "volume", "create", self.idp_volume])
 
     def compose(
         self, *args: str, check: bool = True, timeout: int = COMMAND_TIMEOUT
     ) -> subprocess.CompletedProcess[str]:
         cmd = ["docker", "compose", "-p", self.project, "--env-file", str(self.env_file)]
         cmd += ["-f", str(COMPOSE_FILE)]
+        if self.idp:
+            # Explicit, because a --profile flag from the caller replaces COMPOSE_PROFILES.
+            cmd += ["--profile", BUNDLED_IDP]
         for overlay in self.overlays:
             cmd += ["-f", str(overlay)]
         return run([*cmd, *args], check=check, timeout=timeout)
@@ -169,7 +202,8 @@ class Stack:
         while time.monotonic() < deadline:
             last = self.states()
             healthy = {s.get("Service") for s in last if s.get("Health") == "healthy"}
-            if {"atlas-api", "atlas-proxy"} <= healthy:
+            needed = {"atlas-api", "atlas-proxy"} | ({"idp"} if self.idp else set())
+            if needed <= healthy:
                 return
             exited = [s for s in last if s.get("State") == "exited" and s.get("ExitCode", 0) != 0]
             if exited:
@@ -246,7 +280,9 @@ class Stack:
                     continue
         return entries
 
-    def from_inside(self, path: str, *, headers: dict[str, str] | None = None) -> int:
+    def from_inside(
+        self, path: str, *, headers: dict[str, str] | None = None, host: str = PUBLIC_HOST
+    ) -> int:
         """A request to the proxy from another container on the stack's network.
 
         That container is neither loopback nor the gateway, so it is an untrusted peer.
@@ -254,7 +290,7 @@ class Stack:
         script = (
             "import http.client,sys,json;"
             "c=http.client.HTTPConnection('atlas-proxy',8080,timeout=10);"
-            f"c.request('GET',{path!r},headers={{'Host':{PUBLIC_HOST!r},**json.loads(sys.argv[1])}});"
+            f"c.request('GET',{path!r},headers={{'Host':{host!r},**json.loads(sys.argv[1])}});"
             "print(c.getresponse().status)"
         )
         result = self.compose(
@@ -270,6 +306,33 @@ class Stack:
             json.dumps(headers or {}),
         )
         return int(result.stdout.strip().splitlines()[-1])
+
+    def python_in(self, service: str, script: str, *args: str, mounts: tuple[str, ...] = ()) -> str:
+        """Run `python -c script` in a one-off container of `service` (atlas image)."""
+        cmd = ["run", "--rm", "--no-deps", "-T"]
+        for mount in mounts:
+            cmd += ["-v", mount]
+        profiles = ["--profile", "tools"] if service == "atlas-backup" else []
+        result = self.compose(
+            *profiles, *cmd, "--entrypoint", "python", service, "-c", script, *args
+        )
+        return result.stdout.strip().splitlines()[-1]
+
+    def container_id(self, service: str) -> str:
+        return self.compose("ps", "-q", service).stdout.strip()
+
+    def network_gateway(self, network: str) -> str:
+        result = run(
+            [
+                "docker",
+                "network",
+                "inspect",
+                f"{self.project}_{network}",
+                "--format",
+                "{{range .IPAM.Config}}{{.Gateway}} {{end}}",
+            ]
+        )
+        return result.stdout.split()[0]
 
     def psql(self, sql: str) -> str:
         # The postgres image trusts local socket connections inside the container.
@@ -306,7 +369,7 @@ class Stack:
                 timeout=DOWN_TIMEOUT,
             )
         with contextlib.suppress(HarnessTimeout):
-            run(["docker", "volume", "rm", "-f", self.volume], check=False)
+            run(["docker", "volume", "rm", "-f", self.volume, self.idp_volume], check=False)
         # Files under secrets/ and backups/ belong to container uids now; remove them
         # as root inside a container so pytest's tmp cleanup doesn't fail.
         with contextlib.suppress(HarnessTimeout):

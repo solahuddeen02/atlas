@@ -10,13 +10,19 @@
 # Settings come from deploy/.env (template: .env.example); secrets are generated
 # by atlas-init under ${ATLAS_SECRETS_DIR} (ADR-004). Nothing secret is in this file.
 #
-# First start:
-#   cp .env.example .env            # then set ATLAS_PUBLIC_URL
-#   ./install.sh                    # creates the external volume, then `up -d`
+# Bundled IdP (ADR-001), profile `bundled-idp` (on in .env.example): atlas-idp-init →
+# idp (Kanidm), served by atlas-proxy at ATLAS_IDP_PUBLIC_URL. Without the profile,
+# this is the bring-your-own-OIDC setup.
+#   - idp-front (internal): atlas-proxy + idp only. Kanidm trusts X-Forwarded-For from
+#     this subnet (ATLAS_IDP_FRONT_SUBNET) and from nowhere else.
+#   - idp-back (internal): atlas-api + idp, for the back-channel (Phase 5b). Not trusted.
+#   - Kanidm's whole configuration is the server.toml that atlas-idp-init writes. Never
+#     set KANIDM_* variables here: they override that file, and
+#     KANIDM_TRUST_X_FORWARDED_FOR=true would trust every client.
 #
-# TODO(spike-s): the bundled IdP service (`idp`, profile bundled-idp, on by
-# default), its external volume ${ATLAS_IDP_VOLUME}, and its virtual host in
-# atlas-proxy. Without it, this is the bring-your-own-OIDC setup.
+# First start:
+#   cp .env.example .env            # then set ATLAS_PUBLIC_URL and ATLAS_IDP_PUBLIC_URL
+#   ./install.sh                    # creates the external volumes, then `up -d`
 
 name: atlas
 
@@ -28,6 +34,10 @@ x-atlas: &atlas
 
 x-tz: &tz
   TZ: ${TZ:-UTC}
+
+# The Kanidm release series of the pinned idp image below. Change both together:
+# a Kanidm backup only restores into the same series (atlas-admin restore checks it).
+x-kanidm-series: &kanidm-series "1.12"
 
 services:
   atlas-init:
@@ -104,6 +114,11 @@ services:
     environment:
       <<: *tz
       ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
+      # Bundled IdP: the OIDC issuer defaults from it (ADR-001).
+      ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+    networks:
+      - default
+      - idp-back
     volumes:
       # Only the Atlas secrets. The API never sees the Postgres superuser password.
       - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
@@ -118,6 +133,84 @@ services:
       retries: 12
     depends_on:
       atlas-migrate:
+        condition: service_completed_successfully
+
+  # --- Bundled IdP (profile bundled-idp) -------------------------------------------
+
+  # Writes the IdP's internal CA, TLS key/certificate and server.toml (ADR-004 §3),
+  # and gives the idp volume and backup dirs to the idp user. Root, no network, like
+  # atlas-init. The CA private key is mounted here and in no running service.
+  atlas-idp-init:
+    <<: *atlas
+    profiles: ["bundled-idp"]
+    user: "0:0"
+    network_mode: none
+    command:
+      - atlas-admin
+      - init
+      - --secrets-dir=/secrets
+      - --backup-dir=/backups
+      - --chown
+      - --idp-data-dir=/idp-data
+    environment:
+      <<: *tz
+      ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
+      # Required with this profile; init refuses to run without it (--idp-data-dir).
+      ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+      ATLAS_IDP_FRONT_SUBNET: ${ATLAS_IDP_FRONT_SUBNET:-10.249.73.0/28}
+      ATLAS_IDP_BACKUP_SCHEDULE: ${ATLAS_IDP_BACKUP_SCHEDULE:-}
+      ATLAS_IDP_BACKUP_VERSIONS: ${ATLAS_IDP_BACKUP_VERSIONS:-24}
+    volumes:
+      - ${ATLAS_SECRETS_DIR:-./secrets}:/secrets
+      - ${ATLAS_BACKUP_DIR:-./backups}:/backups
+      - idp-data:/idp-data
+    depends_on:
+      atlas-init:
+        condition: service_completed_successfully
+
+  idp:
+    # kanidm/server:1.12.0 (multi-arch index), pinned by digest. Series: x-kanidm-series.
+    image: kanidm/server@sha256:71b6ff5a9c9c32b632894d8acef5a2afc77941b35a0aa95dcee959fe688d5ce9
+    profiles: ["bundled-idp"]
+    restart: unless-stopped
+    # The image has no USER and would run as root; uid/gid 10002 owns only the data
+    # volume and the online-backup dir (atlas-idp-init sets them up).
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10002,gid=10002,mode=0700
+    command: ["/sbin/kanidmd", "server", "-c", "/etc/atlas-idp/server.toml"]
+    # No KANIDM_* variables, ever: see the header of this file.
+    environment:
+      <<: *tz
+    volumes:
+      - idp-data:/data
+      # server.toml, the TLS key and chain: read-only, root-owned, idp group (0440).
+      - ${ATLAS_SECRETS_DIR:-./secrets}/idp:/etc/atlas-idp:ro
+      # Kanidm's online backups (gzip, 0644 files in a 2750 dir); atlas-backup copies them.
+      - ${ATLAS_BACKUP_DIR:-./backups}/idp-online:/var/lib/atlas-idp-backups
+      # A backup staged by `atlas-admin restore` for the offline restore.
+      - ${ATLAS_BACKUP_DIR:-./backups}/idp-restore:/restore:ro
+    networks:
+      - idp-front
+      - idp-back
+    healthcheck:
+      # -v verifies TLS: the chain is leaf + internal CA, and the cert names localhost.
+      test:
+        - CMD
+        - /sbin/kanidmd
+        - scripting
+        - healthcheck
+        - -v
+        - -c
+        - /etc/atlas-idp/server.toml
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+      start_interval: 2s
+    depends_on:
+      atlas-idp-init:
         condition: service_completed_successfully
 
   atlas-proxy:
@@ -144,9 +237,19 @@ services:
       ATLAS_MAX_BODY_SIZE: ${ATLAS_MAX_BODY_SIZE:-10m}
       ATLAS_RATE_LIMIT_AUTH: ${ATLAS_RATE_LIMIT_AUTH:-10r/m}
       ATLAS_RATE_LIMIT_API: ${ATLAS_RATE_LIMIT_API:-20r/s}
+      # Bundled IdP: its virtual host (empty = BYO OIDC, no IdP vhost).
+      ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+      ATLAS_RATE_LIMIT_IDP_AUTH: ${ATLAS_RATE_LIMIT_IDP_AUTH:-30r/m}
+    # `default` stays first and is the only network with a gateway: idp-front is
+    # internal, so the gateway the render script trusts is unchanged (ADR-003 §1).
+    networks:
+      - default
+      - idp-front
     volumes:
       - ./nginx/40-atlas-render.sh:/docker-entrypoint.d/40-atlas-render.sh:ro
       - ./nginx/html:/usr/share/atlas/web:ro
+      # The internal CA certificate only (public), to verify the idp service.
+      - ${ATLAS_SECRETS_DIR:-./secrets}/idp-trust:/etc/atlas-idp-ca:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
       interval: 5s
@@ -155,6 +258,11 @@ services:
     depends_on:
       atlas-api:
         condition: service_healthy
+      # Only with the bundled-idp profile; BYO has no idp service.
+      idp:
+        condition: service_healthy
+        required: false
+        restart: true
 
   # docker compose run --rm atlas-backup
   # docker compose run --rm atlas-backup atlas-admin restore --from /var/backups/atlas/<dir> --yes
@@ -167,6 +275,9 @@ services:
       ATLAS_ENV_FILES: /run/secrets/atlas/app.env
       ATLAS_BACKUP_KEEP_DAILY: ${ATLAS_BACKUP_KEEP_DAILY:-7}
       ATLAS_BACKUP_KEEP_WEEKLY: ${ATLAS_BACKUP_KEEP_WEEKLY:-4}
+      # Bundled IdP: copy Kanidm's newest online backup into each backup set.
+      ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+      ATLAS_IDP_KANIDM_SERIES: *kanidm-series
     volumes:
       - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
       - ${ATLAS_BACKUP_DIR:-./backups}:/var/backups/atlas
@@ -180,3 +291,20 @@ volumes:
     # database (ADR-005 §4). Create it once: docker volume create atlas_pgdata
     external: true
     name: ${ATLAS_PGDATA_VOLUME:-atlas_pgdata}
+  idp-data:
+    # The bundled IdP's database, external for the same reason (install.sh creates it
+    # with the bundled-idp profile): docker volume create atlas_idp
+    external: true
+    name: ${ATLAS_IDP_VOLUME:-atlas_idp}
+
+networks:
+  # atlas-proxy + idp only: Kanidm trusts X-Forwarded-For from this subnet. Change
+  # ATLAS_IDP_FRONT_SUBNET if it collides with a network of yours (deploy/.env).
+  idp-front:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ATLAS_IDP_FRONT_SUBNET:-10.249.73.0/28}
+  # atlas-api + idp (the OIDC back-channel, Phase 5b). Kanidm trusts nothing here.
+  idp-back:
+    internal: true

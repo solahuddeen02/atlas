@@ -15,15 +15,26 @@ setting() {
     sed -n "s/^$1=//p" .env | tail -n 1 | sed "s/^[\"']//; s/[\"']\$//"
 }
 
+ensure_volume() {
+    if docker volume inspect "$1" > /dev/null 2>&1; then
+        echo "install.sh: using existing volume $1"
+    else
+        docker volume create "$1" > /dev/null
+        echo "install.sh: created volume $1"
+    fi
+}
+
 volume="$(setting ATLAS_PGDATA_VOLUME)"
-volume="${volume:-atlas_pgdata}"
-if docker volume inspect "$volume" > /dev/null 2>&1; then
-    echo "install.sh: using existing volume $volume"
-else
-    docker volume create "$volume" > /dev/null
-    echo "install.sh: created volume $volume"
-fi
-# TODO(spike-s): also create ${ATLAS_IDP_VOLUME:-atlas_idp} when the bundled IdP
-# (profile bundled-idp) is enabled.
+ensure_volume "${volume:-atlas_pgdata}"
+
+# The bundled IdP's volume, only with its profile. A COMPOSE_PROFILES in the
+# environment wins over deploy/.env, as in Compose.
+profiles="${COMPOSE_PROFILES-$(setting COMPOSE_PROFILES)}"
+case ",$(printf '%s' "$profiles" | tr -d ' ')," in
+    *,bundled-idp,*)
+        idp_volume="$(setting ATLAS_IDP_VOLUME)"
+        ensure_volume "${idp_volume:-atlas_idp}"
+        ;;
+esac
 
 exec docker compose up -d "$@"

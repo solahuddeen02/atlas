@@ -176,10 +176,20 @@ def test_body_size_limit_returns_413(make_stack: MakeStack) -> None:
 
 
 def test_byo_mode_has_no_idp_service(make_stack: MakeStack) -> None:
+    # Without the bundled-idp profile there is no IdP at all; with it, see test_idp.py.
     stack = make_stack(create_volume=False)
     services = stack.compose("config", "--services").stdout.split()
-    assert "idp" not in services  # TODO(spike-s): the bundled-idp profile adds it
+    assert "idp" not in services and "atlas-idp-init" not in services
     assert {"atlas-proxy", "atlas-api", "postgres"} <= set(services)
+    config = stack.compose("config").stdout
+    assert "KANIDM_" not in config
+    # The proxy renders no IdP virtual host.
+    assert (
+        json.loads(stack.compose("config", "--format", "json").stdout)["services"]["atlas-proxy"][
+            "environment"
+        ]["ATLAS_IDP_PUBLIC_URL"]
+        == ""
+    )
 
 
 def test_proxy_refuses_bad_config(make_stack: MakeStack) -> None:
