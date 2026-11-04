@@ -6,6 +6,9 @@ Rules:
   empty), only that key is appended; every existing line stays as it was. This is
   what makes "delete the line and re-run" rotate a secret (ADR-004 §6).
 - Values come from `secrets` (the OS CSPRNG) and are never printed.
+
+With the bundled IdP (ATLAS_IDP_PUBLIC_URL set; see `atlas.kernel.cli.idp`) init also
+writes the internal CA, the IdP's TLS key and certificate, and its server.toml.
 """
 
 from __future__ import annotations
@@ -16,8 +19,12 @@ import stat
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import dotenv_values
+
+if TYPE_CHECKING:
+    from atlas.kernel.cli.idp import IdpOptions
 
 DB_HOST = "postgres"
 DB_PORT = 5432
@@ -47,9 +54,9 @@ APP_ENV_GENERATORS: dict[str, Callable[[], str]] = {
     "DATABASE_URL": lambda: _database_url(APP_ROLE),
     "ATLAS_MIGRATOR_DATABASE_URL": lambda: _database_url(MIGRATOR_ROLE),
 }
-# TODO(spike-s): bundled IdP only, after its bootstrap: ATLAS_OIDC_CLIENT_SECRET and
-# ATLAS_IDP_ADMIN_TOKEN in atlas/app.env, and the idp/ directory (internal CA, its key,
-# server certificate and key). Not generated until Spike S confirms the IdP.
+# TODO(phase-5b): bundled IdP only, after its bootstrap: ATLAS_OIDC_CLIENT_SECRET and
+# ATLAS_IDP_ADMIN_TOKEN in atlas/app.env. The IdP's CA, certificate and server.toml are
+# written by atlas.kernel.cli.idp (Phase 5a).
 # The atlas_app/atlas_migrator roles are created from these passwords by
 # `atlas-admin db-init` (atlas.kernel.db.bootstrap) once Postgres is up.
 
@@ -63,11 +70,18 @@ class Ownership:
       read (0750/0640), because `atlas-db-init` runs as the Atlas user and needs the
       superuser password. Containers only see the subdirectories they mount, so the
       API, which never mounts `postgres/`, can't read it anyway.
+    - Bundled IdP (see atlas.kernel.cli.idp): the idp service runs as `idp_uid`/`idp_gid`
+      (10002). Files it must only read belong to `admin_uid` (root), group `idp_gid`.
     """
 
     app_uid: int = 10001
     app_gid: int = 10001
     postgres_uid: int = 999
+    idp_uid: int = 10002
+    idp_gid: int = 10002
+    # Owner of files no container may change (the CA, the idp service's config).
+    admin_uid: int = 0
+    admin_gid: int = 0
 
 
 @dataclass
@@ -85,14 +99,14 @@ class InitReport:
         return out
 
 
-def _ensure_dir(path: Path, root: Path, report: InitReport) -> None:
+def _ensure_dir(path: Path, root: Path, report: InitReport, *, public: bool = False) -> None:
     label = f"{path.relative_to(root)}/" if path != root else f"{path}/"
     if path.exists():
         if not path.is_dir():
             raise InitError(f"{path} exists and is not a directory")
         # Group read is deliberate for postgres/ (see Ownership); group write or any
-        # access for others is not.
-        if stat.S_IMODE(path.stat().st_mode) & 0o027:
+        # access for others is not. `public` dirs hold only public files (a CA cert).
+        if stat.S_IMODE(path.stat().st_mode) & (0o022 if public else 0o027):
             report.warnings.append(f"{label} is accessible by group/others; consider chmod 700")
         return
     path.mkdir(mode=DIR_MODE, parents=True)
@@ -197,8 +211,12 @@ def run_init(
     *,
     backup_dir: Path | None = None,
     owners: Ownership | None = None,
+    idp: IdpOptions | None = None,
 ) -> InitReport:
-    """Generate missing secrets. With `owners`, also set the container ownership."""
+    """Generate missing secrets. With `owners`, also set the container ownership.
+
+    With `idp` (the bundled IdP), also the IdP's CA, certificate, config and dirs.
+    """
     root = secrets_dir
     report = InitReport()
     _ensure_dir(root, root, report)
@@ -218,4 +236,8 @@ def run_init(
         report.created.append(f"{backup_dir}/")
     if owners is not None:
         _apply_ownership(root, backup_dir, owners)
+    if idp is not None:
+        from atlas.kernel.cli.idp import ensure_idp
+
+        ensure_idp(root, backup_dir, idp, owners, report)
     return report

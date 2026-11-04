@@ -57,11 +57,14 @@ def test_strict_modes_despite_permissive_umask(secrets_dir: Path) -> None:
     assert mode(secrets_dir / "atlas/app.env") == 0o600
 
 
-def test_idp_secrets_not_generated_before_spike(secrets_dir: Path) -> None:
-    # Deferred until Spike S confirms the bundled IdP (PLAN-v1, Phase 2).
-    run_init(secrets_dir)
-    assert not (secrets_dir / "idp").exists()
+def test_byo_init_writes_no_idp_files(secrets_dir: Path, tmp_path: Path) -> None:
+    # Without the bundled IdP (no ATLAS_IDP_PUBLIC_URL) init is exactly as before 5a.
+    run_init(secrets_dir, backup_dir=tmp_path / "b")
+    for name in ("idp", "idp-ca", "idp-trust"):
+        assert not (secrets_dir / name).exists()
+    assert list((tmp_path / "b").iterdir()) == []
     app_env = dotenv_values(secrets_dir / "atlas/app.env")
+    # Phase 5b: the IdP bootstrap writes these; until then they are set by hand.
     assert "ATLAS_IDP_ADMIN_TOKEN" not in app_env
     assert "ATLAS_OIDC_CLIENT_SECRET" not in app_env
 
