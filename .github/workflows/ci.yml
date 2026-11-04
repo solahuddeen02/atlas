@@ -190,6 +190,14 @@ jobs:
         run: uv sync --locked
       - name: Build the Atlas image
         run: docker build -t atlas:local .
+      - name: Pinned Kanidm digest matches kanidm/server:1.12.0 (multi-arch index)
+        run: |
+          pinned="$(sed -n 's|^ *image: kanidm/server@\(sha256:[0-9a-f]\{64\}\)$|\1|p' deploy/docker-compose.yml)"
+          docker buildx imagetools inspect kanidm/server:1.12.0
+          actual="$(docker buildx imagetools inspect kanidm/server:1.12.0 --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "pinned: $pinned"
+          echo "tag:    $actual"
+          test -n "$pinned" && test "$pinned" = "$actual"
       - name: Compose tests (ADR-003, ADR-004 §3, ADR-005 §3–4)
         # Below the job limit, so the diagnostics step below still runs. Each test also
         # has its own 480 s watchdog (tests/compose/conftest.py).
