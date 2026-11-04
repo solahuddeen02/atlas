@@ -22,6 +22,11 @@ IDP_IMAGE = "kanidm/server@sha256:71b6ff5a9c9c32b632894d8acef5a2afc77941b35a0aa9
 FAST_BACKUPS = "*/5 * * * * * *"  # every 5 s (Kanidm's 7-field form: sec ... year)
 CONFIG = "/etc/atlas-idp/server.toml"
 BACKUP_WAIT = 90
+# A well-formed JWS that no key verifies: Kanidm logs "Unable to verify token" at INFO
+# inside the request span (kanidm v1.12.0 server/lib/src/idm/server.rs:540-544), so
+# the span, with its `uri` and `client_address` fields, is printed. Requests that log
+# no event inside their span (e.g. a plain GET /ui/login, a 301) are not printed.
+PROBE_TOKEN = "Bearer eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJwcm9iZSJ9.AAAA"
 
 
 def rendered(stack: Stack) -> dict[str, dict[str, dict[str, object]]]:
@@ -44,7 +49,12 @@ def wait_for_kanidm_log(stack: Stack, probe: str) -> list[str]:
         if clients := kanidm_clients(stack, probe):
             return clients
         time.sleep(1)
-    stack.fail(f"Kanidm logged no client_address for a request with {probe!r}")
+    out = stack.compose("logs", "--no-color", "--no-log-prefix", "idp", check=False).stdout
+    lines = [line for line in out.splitlines() if probe in line or "client_address" in line]
+    stack.fail(
+        f"Kanidm logged no client_address for a request with {probe!r}; "
+        f"matching idp log lines: {lines[-10:]}"
+    )
     return []
 
 
@@ -218,13 +228,21 @@ def test_kanidm_sees_the_real_client_ip(make_stack: MakeStack) -> None:
     # 1. From the host: the peer is the trusted gateway (where a tunnel connects), so
     #    its X-Forwarded-For names the client, and Kanidm sees that client.
     probe = "probe" + secrets.token_hex(4)
-    stack.request(f"/ui/login?{probe}", host=IDP_HOST, headers={"X-Forwarded-For": SPOOFED})
+    stack.request(
+        f"/v1/self?{probe}",
+        host=IDP_HOST,
+        headers={"X-Forwarded-For": SPOOFED, "Authorization": PROBE_TOKEN},
+    )
     assert wait_for_kanidm_log(stack, probe) == [SPOOFED]
 
     # 2. From an untrusted container: atlas-proxy ignores its X-Forwarded-For and
     #    overwrites the header with the real peer, which is what Kanidm logs.
     probe = "probe" + secrets.token_hex(4)
-    stack.from_inside(f"/ui/login?{probe}", host=IDP_HOST, headers={"X-Forwarded-For": SPOOFED})
+    stack.from_inside(
+        f"/v1/self?{probe}",
+        host=IDP_HOST,
+        headers={"X-Forwarded-For": SPOOFED, "Authorization": PROBE_TOKEN},
+    )
     seen = wait_for_kanidm_log(stack, probe)
     assert seen and SPOOFED not in seen
 
@@ -235,15 +253,17 @@ def test_kanidm_sees_the_real_client_ip(make_stack: MakeStack) -> None:
         "import http.client,ssl,sys;"
         "ctx=ssl.create_default_context(cafile='/ca/ca.pem');"
         "c=http.client.HTTPSConnection('idp',8443,context=ctx,timeout=10);"
-        "c.request('GET',sys.argv[1],headers={'Host':sys.argv[2],'X-Forwarded-For':sys.argv[3]});"
+        "c.request('GET',sys.argv[1],headers={'Host':sys.argv[2],'X-Forwarded-For':sys.argv[3],"
+        "'Authorization':sys.argv[4]});"
         "print(c.getresponse().status)"
     )
     status = stack.python_in(
         "atlas-api",
         script,
-        f"/ui/login?{probe}",
+        f"/v1/self?{probe}",
         IDP_HOST,
         SPOOFED,
+        PROBE_TOKEN,
         mounts=(f"{stack.secrets_dir}/idp-trust:/ca:ro",),
     )
     assert status.isdigit()
