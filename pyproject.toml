@@ -8,12 +8,12 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13",
     "cryptography>=44",
-    "fastapi>=0.115",
+    "fastapi>=0.162.2",
     "psycopg[binary]>=3.2",
-    "pydantic>=2.9",
+    "pydantic>=2.14.3",
     "pydantic-settings>=2.6",
     "python-dotenv>=1.0",
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.1.8",
     "uvicorn>=0.32",
 ]
 
@@ -31,12 +31,12 @@ module-root = ""
 [dependency-groups]
 dev = [
     "httpx>=0.28",
-    "import-linter>=2.1",
+    "import-linter>=2.16",
     "mypy>=1.13",
     "pip-audit>=2.7",
     "pytest>=8.3",
     "pyyaml>=6.0",
-    "ruff>=0.8",
+    "ruff>=0.17.4",
     "types-pyyaml>=6.0",
 ]
 
