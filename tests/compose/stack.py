@@ -321,6 +321,11 @@ class Stack:
     def container_id(self, service: str) -> str:
         return self.compose("ps", "-q", service).stdout.strip()
 
+    def service_address(self, service: str, network: str) -> str:
+        """The IPv4 address of `service` on one of the stack's networks."""
+        info = json.loads(run(["docker", "inspect", self.container_id(service)]).stdout)[0]
+        return str(info["NetworkSettings"]["Networks"][f"{self.project}_{network}"]["IPAddress"])
+
     def network_gateway(self, network: str) -> str:
         result = run(
             [
