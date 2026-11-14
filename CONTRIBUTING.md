@@ -49,10 +49,12 @@ Configuration rules are in [ADR-004](docs/adr/004-config-and-secrets.md). Only `
 Tests that need PostgreSQL use `TEST_POSTGRES_URL`, a **superuser** URL for a throwaway server. Each test creates its own database and drops it afterwards. The `atlas_app` and `atlas_migrator` roles are cluster-wide, so don't point this at a server you care about. Without the variable, those tests are skipped locally. In CI (`CI=true`) they fail instead.
 
 ```bash
-docker run --rm -d --name atlas-test-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17
-export TEST_POSTGRES_URL=postgresql://postgres:test@127.0.0.1:55432/postgres
+docker run --rm -d --name atlas-test-pg -e POSTGRES_PASSWORD=postgres-ci -p 127.0.0.1:55432:5432 postgres:17
+export TEST_POSTGRES_URL=postgresql://postgres:postgres-ci@127.0.0.1:55432/postgres
 uv run pytest
 ```
+
+Use a password that can't appear inside other output, like the one above (CI uses the same). The tests check that no password is ever printed by searching the output for it, and a password such as `test` also matches the generated database names (`atlas_test_…`).
 
 `pg_dump` and `pg_restore` must be on `PATH`, with a major version at least the server's.
 
