@@ -56,7 +56,7 @@ Module boundaries are enforced in code (import contracts, the SDK and per-module
 | Network | Members | Notes |
 |---|---|---|
 | `default` | every service except `idp` | atlas-proxy's only route and gateway; the trusted-peer rules of ADR-003 §1 are computed on it |
-| `idp-front` | atlas-proxy, idp | `internal: true`, subnet `ATLAS_IDP_FRONT_SUBNET`. The only network Kanidm trusts `X-Forwarded-For` from; atlas-proxy overwrites that header with the verified client address |
+| `idp-front` | atlas-proxy, idp | `internal: true`, subnet `ATLAS_IDP_FRONT_SUBNET`. The only network Kanidm trusts `X-Forwarded-For` from; atlas-proxy overwrites that header with the verified client address. The host has no address on it (`inhibit_ipv4`), so nothing on the host can connect from the trusted subnet |
 | `idp-back` | atlas-api, idp | `internal: true`. The OIDC back-channel (Phase 5b). Not trusted by Kanidm |
 
 Kanidm's configuration is only the `server.toml` that `atlas-idp-init` renders: the compose file sets no `KANIDM_*` variables, because they would override it ([SELF_HOSTING → bundled identity provider](SELF_HOSTING.md#the-bundled-identity-provider)).
@@ -64,7 +64,7 @@ Kanidm's configuration is only the `server.toml` that `atlas-idp-init` renders: 
 **With bring-your-own OIDC** ([ADR-001](adr/001-identity.md)):
 - the `bundled-idp` profile is off, so there's no `idp` service and no IdP vhost;
 - `atlas-api` talks to the external issuer;
-- `atlas-idp-init` doesn't run, so there's no internal CA either. atlas-proxy still joins the (unused) `idp-front` network.
+- `atlas-idp-init` doesn't run, so there's no internal CA either. atlas-proxy still joins the (unused) `idp-front` network and mounts the empty `secrets/idp-trust/`, which `atlas-init` creates.
 
 ## 2. Code layout and module boundaries
 

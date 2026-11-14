@@ -258,6 +258,10 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 >   - settings `ATLAS_IDP_PUBLIC_URL`, `ATLAS_IDP_FRONT_SUBNET`, `ATLAS_IDENTITY_ADMIN` and the issuer default.
 > - **Open design point resolved:** Kanidm 1.12.0 accepts CIDR ranges in `x-forward-for` (kanidm v1.12.0 `server/core/src/config.rs:187-188`, `IpCidr`, with the unit test `assert_cidr_parsing_behaviour` at `:1129-1146`). So atlas-proxy needs no fixed address. Kanidm trusts the whole `idp-front` subnet, which only atlas-proxy and idp join.
 > - **Moved to 5b**, because they need the IdP bootstrap (an OAuth2 client, a person): Kanidm's Immich client with strict redirect URIs, and the account-policy auth-expiry test (Gap 5).
+> - **5b-0 done: the three Phase 5a follow-ups.**
+>   - **The host can't reach Kanidm on `idp-front`.** The network's gateway address belonged to the host and lay inside the subnet Kanidm trusts for `X-Forwarded-For`. `idp-front` now has the bridge option `com.docker.network.bridge.inhibit_ipv4`, so the host has no address on it. A compose test connects from the host's network namespace and must fail, while atlas-proxy → idp and the real client IP at Kanidm still work. The `ip_range` fallback was not needed, so `server.toml` still trusts the whole subnet.
+>   - **`secrets/idp-trust/` in BYO mode.** atlas-proxy mounts it in both modes, so `atlas-init` now creates it in both (root, `0755`), never touching what is in it. In BYO mode it stays empty.
+>   - **The Kanidm digest check** left the required `compose` job for its own workflow, `kanidm-digest` (compose-file changes, weekly, on demand; retries; optional Docker Hub login). It is not a required check.
 > - **5b next:** the IdP bootstrap (Atlas OAuth2 client and its generated secret, console service account and `ATLAS_IDP_ADMIN_TOKEN`, role groups and policies), then the RP, sessions and the `IdentityAdmin` adapters.
 
 **Work:**
