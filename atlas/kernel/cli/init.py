@@ -35,6 +35,14 @@ MIGRATOR_ROLE = "atlas_migrator"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
+# The directory atlas-proxy mounts for the bundled IdP's CA certificate (public). The
+# proxy mounts it in both modes, so init creates it in both and, with --chown, sets its
+# owner and mode. Under Compose, Docker may have created the missing bind-mount source
+# first (root, 0755); init then leaves the same result. Without the bundled IdP it
+# stays empty.
+IDP_TRUST_DIR = "idp-trust"
+IDP_TRUST_DIR_MODE = 0o755
+
 
 class InitError(RuntimeError):
     pass
@@ -205,6 +213,11 @@ def _apply_ownership(root: Path, backup_dir: Path | None, owners: Ownership) -> 
     if backup_dir is not None:
         _set_owner(backup_dir, *app, DIR_MODE)
 
+    # Only the directory, never what is in it: with the bundled IdP its ca.pem is set
+    # by atlas.kernel.cli.idp. The owner is whoever runs init, which is root in
+    # atlas-init (changing any other owner above needs root already).
+    _set_owner(root / IDP_TRUST_DIR, os.geteuid(), os.getegid(), IDP_TRUST_DIR_MODE)
+
 
 def run_init(
     secrets_dir: Path,
@@ -229,6 +242,8 @@ def run_init(
     postgres_dir = root / "postgres"
     _ensure_dir(postgres_dir, root, report)
     _ensure_secret_file(postgres_dir / "password", root, report)
+
+    _ensure_dir(root / IDP_TRUST_DIR, root, report, public=True)
 
     if backup_dir is not None and not backup_dir.exists():
         backup_dir.mkdir(mode=DIR_MODE, parents=True)
