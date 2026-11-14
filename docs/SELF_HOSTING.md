@@ -251,7 +251,24 @@ With `COMPOSE_PROFILES=bundled-idp` (the default), the stack runs [Kanidm](https
 | `idp-front` (internal, subnet `ATLAS_IDP_FRONT_SUBNET`) | atlas-proxy, idp | The proxy's path to Kanidm. Kanidm trusts `X-Forwarded-For` from this subnet only. atlas-proxy overwrites that header with the verified client address, so Kanidm's logs and lockout see the real client |
 | `idp-back` (internal) | atlas-api, idp | The OIDC back-channel (used from Phase 5b). Kanidm trusts nothing on it |
 
-atlas-proxy joins `idp-front` in BYO mode too, so that network exists either way.
+**What the host can reach on `idp-front`.** Nothing. Docker normally gives the host an address on every bridge network (the network's gateway), and on `idp-front` that address would lie inside the subnet Kanidm trusts: a program on the host could connect straight to Kanidm and name any client address in `X-Forwarded-For`. So `idp-front` is created with the bridge option `com.docker.network.bridge.inhibit_ipv4`, which leaves the host without an address or a route in that subnet:
+
+- from the host, a connection to Kanidm's `idp-front` address fails. To reach the IdP from the host, go through atlas-proxy (`ATLAS_IDP_PUBLIC_URL`), like every other client;
+- atlas-proxy and `idp` reach each other as before, by service name;
+- `docker compose exec` and `docker compose logs` still work, because they don't use the network.
+
+To check it on a running stack (the project is named `atlas` unless you changed it), this prints `true`:
+
+```bash
+docker network inspect atlas_idp-front --format '{{index .Options "com.docker.network.bridge.inhibit_ipv4"}}'
+```
+
+This covers the host's own network stack. Anyone who can run Docker commands on the host can still attach a container to any network, as with every Docker setup, so keep access to the Docker socket limited to administrators.
+
+**In BYO mode**, atlas-proxy still joins `idp-front`, so that network exists either way:
+
+- `ATLAS_IDP_FRONT_SUBNET` is still used and can still collide with a network of yours. The fix is the same: [change it](#changing-the-idp-front-subnet);
+- `secrets/idp-trust/` still exists, because atlas-proxy mounts it. `atlas-init` creates it (root, `0755`) and it stays empty: no CA or certificate is generated without the bundled IdP.
 
 **Configuration.** All of Kanidm's settings are in `secrets/idp/server.toml`. `atlas-idp-init` rewrites it from `deploy/.env` on every start, so don't edit it. It holds no secrets. Never add `KANIDM_*` variables to the compose file: they override `server.toml`, and `KANIDM_TRUST_X_FORWARDED_FOR=true` makes Kanidm trust every client's address.
 
@@ -261,7 +278,7 @@ atlas-proxy joins `idp-front` in BYO mode too, so that network exists either way
 |---|---|---|---|
 | `secrets/idp-ca/ca.key`, `ca.pem` | The internal CA. Never rotated automatically | **no running service** | root, `0600` (directory `0700`) |
 | `secrets/idp/server.key`, `chain.pem`, `server.toml` | Kanidm's TLS key, its certificate + the CA certificate, its config | `idp`, read-only | root, group 10002, `0440` (directory `0750`) |
-| `secrets/idp-trust/ca.pem` | The CA certificate only (public) | atlas-proxy | root, `0644` (directory `0755`) |
+| `secrets/idp-trust/ca.pem` | The CA certificate only (public). The directory also exists, empty, in BYO mode | atlas-proxy | root, `0644` (directory `0755`) |
 | `backups/idp-online/` | Kanidm's online backups (gzip). **They contain every IdP secret** | `idp` (writes), `atlas-backup` (reads) | uid 10002, group 10001, `2750` |
 | `backups/idp-restore/` | A backup staged by `atlas-admin restore` | `idp`, read-only | uid 10001, group 10002, `2750` |
 | Docker volume `atlas_idp` | Kanidm's database | `idp` | uid 10002, `0700` |

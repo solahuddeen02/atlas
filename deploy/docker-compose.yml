@@ -14,7 +14,8 @@
 # idp (Kanidm), served by atlas-proxy at ATLAS_IDP_PUBLIC_URL. Without the profile,
 # this is the bring-your-own-OIDC setup.
 #   - idp-front (internal): atlas-proxy + idp only. Kanidm trusts X-Forwarded-For from
-#     this subnet (ATLAS_IDP_FRONT_SUBNET) and from nowhere else.
+#     this subnet (ATLAS_IDP_FRONT_SUBNET) and from nowhere else. The host has no
+#     address on it (inhibit_ipv4), so nothing on the host can connect from that subnet.
 #   - idp-back (internal): atlas-api + idp, for the back-channel (Phase 5b). Not trusted.
 #   - Kanidm's whole configuration is the server.toml that atlas-idp-init writes. Never
 #     set KANIDM_* variables here: they override that file, and
@@ -300,8 +301,15 @@ volumes:
 networks:
   # atlas-proxy + idp only: Kanidm trusts X-Forwarded-For from this subnet. Change
   # ATLAS_IDP_FRONT_SUBNET if it collides with a network of yours (deploy/.env).
+  #
+  # inhibit_ipv4: Docker gives the bridge no address, so the host has no address and
+  # no route in this subnet. Without it the host could connect to idp from the
+  # network's gateway address, which is inside the range Kanidm trusts, and name any
+  # client in X-Forwarded-For. Containers on the network are not affected.
   idp-front:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
     ipam:
       config:
         - subnet: ${ATLAS_IDP_FRONT_SUBNET:-10.249.73.0/28}
