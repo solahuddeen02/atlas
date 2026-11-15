@@ -9,7 +9,8 @@ A self-hosted home platform for one household: one front door (OIDC login), fami
 an admin console, and a module registry. Pre-1.0. Status per phase: `README.md` → Status.
 **Spike S is done** (ADR-001 outcome (b): Kanidm is the bundled IdP, with the workarounds recorded there).
 **Phase 5a is done** (bundled IdP service, volume, networks, vhost, internal CA, backup).
-**Next: Phase 5b**: the IdP bootstrap (the work marked `TODO(phase-5b)`), then the RP, sessions and adapters.
+**Phase 5b-1 is done** (the Kanidm client library, `atlas/kernel/identity/kanidm/`).
+**Next: Phase 5b-2**: the IdP bootstrap (the work marked `TODO(phase-5b)`), then the RP, sessions and adapters.
 Follow ADR-001 → "Workarounds and design consequences".
 
 ## Read first

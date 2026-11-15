@@ -18,7 +18,7 @@ The phases of the Foundation plan ([PLAN](docs/PLAN-v1.md)), in order:
 | 2 | Config & secrets | Done¹ |
 | 3 | Database & migrations | Done¹ |
 | 4 | Deploy skeleton (proxy, images, one-command install) | Done¹ |
-| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure) done; 5b next |
+| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure) and 5b-1 (Kanidm client library) done; the IdP bootstrap (5b-2) next |
 | 6 | Authorization core | Planned |
 | 7 | Module registry | Planned |
 | 8 | Admin console | Planned |

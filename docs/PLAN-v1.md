@@ -262,7 +262,19 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 >   - **The host can't reach Kanidm on `idp-front`.** The network's gateway address belonged to the host and lay inside the subnet Kanidm trusts for `X-Forwarded-For`. `idp-front` now has the bridge option `com.docker.network.bridge.inhibit_ipv4`, so the host has no address on it. A compose test connects from the host's network namespace and must fail, while atlas-proxy → idp and the real client IP at Kanidm still work. The `ip_range` fallback was not needed, so `server.toml` still trusts the whole subnet.
 >   - **`secrets/idp-trust/` in BYO mode.** atlas-proxy mounts it in both modes, so `atlas-init` now creates it in both (root, `0755`), never touching what is in it. In BYO mode it stays empty.
 >   - **The Kanidm digest check** left the required `compose` job for its own workflow, `kanidm-digest` (compose-file changes, weekly, on demand; retries; optional Docker Hub login). It is not a required check.
-> - **5b next:** the IdP bootstrap (Atlas OAuth2 client and its generated secret, console service account and `ATLAS_IDP_ADMIN_TOKEN`, role groups and policies), then the RP, sessions and the `IdentityAdmin` adapters.
+> - **5b-1 done: the Kanidm client library** (`atlas/kernel/identity/kanidm/`). No service calls it yet, and nothing changes for an installer.
+>   - REST over `httpx` (now a runtime dependency), always verified against the internal CA: password login for the built-in service accounts, and the service-account, API-token, group and OAuth2-client calls the bootstrap needs.
+>   - The admin unix socket: `RecoverAccount` and `DisableAccount`.
+>   - Typed errors. Credentials are `SecretStr`. Nothing from a response that can hold a credential reaches a log or an error. Entries keep only allowlisted attributes.
+>   - Checked against the real Kanidm 1.12.0, by a probe and by a compose test. What that corrected in the design:
+>     - a refused login is a `200` with state `denied`, and each login step echoes the session *header* of the step before;
+>     - the socket sends one JSON value without a terminator and keeps the connection open, answers a bare `"Error"` without a reason, and sends nothing at all for a request it can't parse;
+>     - `GET …/_basic_secret` is `200 null` both for a missing client and for a caller who may not read it;
+>     - issuing an API token with a label that exists adds a second token, and token times are Unix seconds;
+>     - adding a group member that doesn't exist is a `500`, and a malformed body is a `422` like a weak password;
+>     - `RecoverAccount` sets a new password on every call and re-enables a disabled account.
+>   - The socket is reachable by root and by the idp user (uid 10002) only, through file permissions.
+> - **5b next (5b-2):** the IdP bootstrap (Atlas OAuth2 client and its generated secret, console service account and `ATLAS_IDP_ADMIN_TOKEN`, role groups and policies), then the RP, sessions and the `IdentityAdmin` adapters.
 
 **Work:**
 - OIDC RP using the spike's validated parameters ([ADR-001 → Spike results](adr/001-identity.md#spike-results)):
