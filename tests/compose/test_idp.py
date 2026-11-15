@@ -5,15 +5,17 @@ throwaway stack; see tests/compose/stack.py.
 """
 
 import http.client
+import ipaddress
 import json
 import re
 import secrets
+import socket
 import time
 from collections.abc import Callable
 
 import pytest
 
-from tests.compose.stack import IDP_HOST, Stack, run
+from tests.compose.stack import IDP_HOST, IMAGE, Stack, run
 
 MakeStack = Callable[..., Stack]
 
@@ -269,6 +271,95 @@ def test_kanidm_sees_the_real_client_ip(make_stack: MakeStack) -> None:
     assert status.isdigit()
     seen = wait_for_kanidm_log(stack, probe)
     assert seen and SPOOFED not in seen
+
+
+# Connect to argv[1]:argv[2] and print "connected" or "failed: <why>".
+TCP_PROBE = """
+import socket, sys
+s = socket.socket()
+s.settimeout(5)
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    print("connected")
+except OSError as exc:
+    print("failed:", type(exc).__name__, exc)
+"""
+
+
+def tcp_probe(network: str, address: str, port: int) -> str:
+    """A TCP connect from a one-off container on `network`.
+
+    `host` is the Docker host's own network namespace: the engine host on Linux, and
+    the engine's VM with Docker Desktop, where the machine running the tests is not
+    the host the bridges are on.
+    """
+    cmd = ["docker", "run", "--rm", "--network", network, "--entrypoint", "python", IMAGE]
+    return run([*cmd, "-c", TCP_PROBE, address, str(port)]).stdout.strip()
+
+
+def test_host_cannot_reach_idp_on_idp_front(make_stack: MakeStack) -> None:
+    # Kanidm trusts X-Forwarded-For from the whole idp-front subnet. A bridge network's
+    # gateway address is in that subnet and belongs to the host, so a process on the
+    # host could connect to idp from it and name any client. idp-front therefore has no
+    # host address at all (inhibit_ipv4).
+    stack = make_stack(idp=True)
+    stack.up()
+    stack.wait_healthy()
+    idp_front = stack.service_address("idp", "idp-front")
+    trusted = ipaddress.ip_network(stack.idp_subnet)
+    assert ipaddress.ip_address(idp_front) in trusted
+
+    # The probe and the address are right: a container on idp-front connects.
+    assert tcp_probe(f"{stack.project}_idp-front", idp_front, 8443) == "connected"
+    # From the host, the same connect fails...
+    from_host = tcp_probe("host", idp_front, 8443)
+    assert from_host.startswith("failed:"), from_host
+    # ...and from the machine running the tests (the same host, except on Docker Desktop).
+    with pytest.raises(OSError), socket.create_connection((idp_front, 8443), timeout=5):
+        pass
+    front = rendered(stack)["networks"]["idp-front"]
+    assert front["driver_opts"] == {"com.docker.network.bridge.inhibit_ipv4": "true"}
+
+    # atlas-proxy -> idp is unaffected, over verified TLS...
+    status, _, body = stack.request("/status", host=IDP_HOST)
+    assert (status, body.strip()) == (200, b"true")
+    # ...and Kanidm still sees the real client: the one a trusted peer of the proxy
+    # names, and the connecting address of an untrusted one.
+    probe = "probe" + secrets.token_hex(4)
+    stack.request(
+        f"/v1/self?{probe}",
+        host=IDP_HOST,
+        headers={"X-Forwarded-For": SPOOFED, "Authorization": PROBE_TOKEN},
+    )
+    assert wait_for_kanidm_log(stack, probe) == [SPOOFED]
+    probe = "probe" + secrets.token_hex(4)
+    stack.from_inside(
+        f"/v1/self?{probe}",
+        host=IDP_HOST,
+        headers={"X-Forwarded-For": SPOOFED, "Authorization": PROBE_TOKEN},
+    )
+    seen = wait_for_kanidm_log(stack, probe)
+    assert seen and SPOOFED not in seen
+    assert not [a for a in seen if ipaddress.ip_address(a) in trusted], seen
+
+
+def test_byo_idp_trust_dir_is_root_owned_and_empty(make_stack: MakeStack) -> None:
+    # BYO: atlas-proxy still mounts secrets/idp-trust. Whoever created it first (Docker,
+    # for the missing mount source, or atlas-init), init leaves it root-owned, 0755, and
+    # nothing is written into it.
+    stack = make_stack()
+    stack.up()
+    stack.wait_healthy()
+    script = (
+        "import json,os;p='/secrets/idp-trust';s=os.stat(p);"
+        "print(json.dumps([s.st_uid,s.st_gid,oct(s.st_mode&0o7777),os.listdir(p),"
+        "sorted(n for n in os.listdir('/secrets') if n.startswith('idp'))]))"
+    )
+    result = stack.compose(
+        *("run", "--rm", "--no-deps", "--user", "0:0", "--entrypoint", "python"),
+        *("atlas-init", "-c", script),
+    )
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == [0, 0, "0o755", [], ["idp-trust"]]
 
 
 def test_idp_backup_restore_roundtrip(make_stack: MakeStack) -> None:
