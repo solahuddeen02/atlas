@@ -49,10 +49,12 @@ Configuration rules are in [ADR-004](docs/adr/004-config-and-secrets.md). Only `
 Tests that need PostgreSQL use `TEST_POSTGRES_URL`, a **superuser** URL for a throwaway server. Each test creates its own database and drops it afterwards. The `atlas_app` and `atlas_migrator` roles are cluster-wide, so don't point this at a server you care about. Without the variable, those tests are skipped locally. In CI (`CI=true`) they fail instead.
 
 ```bash
-docker run --rm -d --name atlas-test-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17
-export TEST_POSTGRES_URL=postgresql://postgres:test@127.0.0.1:55432/postgres
+docker run --rm -d --name atlas-test-pg -e POSTGRES_PASSWORD=postgres-ci -p 127.0.0.1:55432:5432 postgres:17
+export TEST_POSTGRES_URL=postgresql://postgres:postgres-ci@127.0.0.1:55432/postgres
 uv run pytest
 ```
+
+Use a password that can't appear inside other output, like the one above (CI uses the same). The tests check that no password is ever printed by searching the output for it, and a password such as `test` also matches the generated database names (`atlas_test_…`).
 
 `pg_dump` and `pg_restore` must be on `PATH`, with a major version at least the server's.
 
@@ -67,7 +69,7 @@ RUN_COMPOSE_TESTS=1 uv run pytest tests/compose -v
 
 ## Checks CI runs
 
-Every job in `.github/workflows/ci.yml` must be green before a PR merges.
+Every job in `.github/workflows/ci.yml` must be green before a PR merges. The one check outside that file, `kanidm-digest`, is listed last and is not required.
 
 | CI job | What it enforces | Run it locally |
 |---|---|---|
@@ -77,8 +79,9 @@ Every job in `.github/workflows/ci.yml` must be green before a PR merges.
 | `gitleaks` | No secrets in the commits being pushed. A weekly workflow (`gitleaks-weekly`) scans the full history | `gitleaks git --redact .` |
 | `audit` | No known vulnerabilities in `uv.lock` or the frontend's runtime deps (`legacy/requirements.txt` is reported, not enforced) | `uv export --all-groups --no-emit-project --format requirements-txt -o /tmp/req.txt && uv run pip-audit --strict --require-hashes --disable-pip -r /tmp/req.txt`, `cd legacy/frontend && npm audit --omit=dev` |
 | `image` | The image builds for linux/amd64 and linux/arm64; it runs as non-root, has the PG 17 client, and contains no source tree, VCS data, tests, env files or `uv` | `docker buildx build --platform linux/amd64,linux/arm64 .` |
-| `compose` | The compose stack comes up healthy; the proxy (single published port, unknown `Host` dropped, real-IP trust, headers, rate and body limits, refusal on bad settings); `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership; the bundled IdP (healthy with verified TLS, proxy → idp over verified TLS, the real client IP at Kanidm, Kanidm backup → restore) | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
+| `compose` | The compose stack comes up healthy; the proxy (single published port, unknown `Host` dropped, real-IP trust, headers, rate and body limits, refusal on bad settings); `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership; the bundled IdP (healthy with verified TLS, proxy → idp over verified TLS, the real client IP at Kanidm, no route from the host to Kanidm on `idp-front`, Kanidm backup → restore); `idp-trust/` root-owned and empty in BYO mode | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
 | `compose-lint` | No literal secret values in any compose file's `environment:` ([ADR-004 §3](docs/adr/004-config-and-secrets.md)) | `uv run python scripts/ci/lint_compose_secrets.py` |
+| `kanidm-digest` (**not required**; `.github/workflows/kanidm-digest.yml`) | The Kanidm digest pinned in `deploy/docker-compose.yml` is the one the `kanidm/server:1.12.0` tag points to. Runs when that compose file or the workflow changes, every Monday, and on demand (`gh workflow run kanidm-digest.yml`). Registry errors are retried with backoff. It logs in to Docker Hub only if the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` exist; forks have none and look the tag up anonymously | `docker buildx imagetools inspect kanidm/server:1.12.0 --format '{{json .Manifest}}'`, then compare `.digest` with the pin |
 
 ### Rules that the linters enforce
 

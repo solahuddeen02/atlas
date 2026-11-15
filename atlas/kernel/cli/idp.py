@@ -45,6 +45,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from atlas.kernel.cli.init import (
     DIR_MODE,
     FILE_MODE,
+    IDP_TRUST_DIR,
     InitError,
     InitReport,
     Ownership,
@@ -61,7 +62,7 @@ IDP_DIR = "idp"
 SERVER_KEY = f"{IDP_DIR}/server.key"
 SERVER_CHAIN = f"{IDP_DIR}/chain.pem"
 SERVER_CONFIG = f"{IDP_DIR}/server.toml"
-TRUST_DIR = "idp-trust"
+TRUST_DIR = IDP_TRUST_DIR  # created by init in both modes
 TRUST_CERT = f"{TRUST_DIR}/ca.pem"
 
 # Backups dir layout.

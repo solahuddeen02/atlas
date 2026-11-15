@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4, Spike S and Phase 5a (the bundled identity provider's infrastructure).
+There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0).
 
 ### Added
 
@@ -50,6 +50,9 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S and Ph
 - The pre-redesign Drive/Photos app now lives in `legacy/` and gets security fixes only ([legacy/README.md](legacy/README.md)).
 - Milestones are named Foundation, First modules and Household apps instead of v1/v2/v3, and releases follow SemVer.
 
+- `atlas-init` now creates `secrets/idp-trust/` itself (root, `0755`) in both modes, because atlas-proxy always mounts it. Before, in bring-your-own OIDC mode the directory appeared only as a side effect of that mount. Without the bundled IdP it stays empty.
+- The check that the pinned Kanidm digest still matches its tag moved out of the `compose` CI job into its own workflow (`kanidm-digest`). It runs when `deploy/docker-compose.yml` changes, weekly and on demand, retries registry errors, and is not a required check, so a Docker Hub rate limit no longer fails unrelated pull requests.
+
 ### Fixed
 
 - `legacy/README.md` now describes the legacy app accurately:
@@ -68,6 +71,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S and Ph
   - responses don't expose storage paths;
   - uploads are size-capped while streaming;
   - refreshed frontend lockfile, clearing high-severity npm advisories.
+- **Bundled IdP: the host can no longer connect to Kanidm on `idp-front`** (5b-0). The network's gateway address belonged to the host and lay inside the subnet Kanidm trusts for `X-Forwarded-For`, so a program on the host could connect to Kanidm directly and name any client address. `idp-front` now has the bridge option `com.docker.network.bridge.inhibit_ipv4`, so the host has no address on it. Existing installs must recreate the network: see the upgrade notes.
 - **New platform:** see the Phase 2–4 entries above. In short:
   - no secret has a default;
   - the API never sees the database superuser password;
@@ -82,6 +86,23 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S and Ph
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` must still be set by hand until Phase 5b.
+- **If you run a pre-release checkout from Phase 5a** (before 5b-0), recreate the `idp-front` network once so that it gets its new option. This applies in bring-your-own OIDC mode too. No setting changes, and the data volumes are not touched. In `deploy/`:
+
+  ```bash
+  docker compose down
+  ```
+
+  ```bash
+  ./install.sh
+  ```
+
+  Never add `-v` to `down`. Then check that this prints `true` (replace `atlas` if you changed the project name):
+
+  ```bash
+  docker network inspect atlas_idp-front --format '{{index .Options "com.docker.network.bridge.inhibit_ipv4"}}'
+  ```
+
+  Recent Docker Compose versions recreate the network on `docker compose up -d` alone; the two commands above work with every version.
 - **Legacy app:**
   - it now runs from `legacy/` (`cd legacy` before any command);
   - `SECRET_KEY` must be set to a strong value, or the app won't start; tokens signed with an old placeholder key no longer work;

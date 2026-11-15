@@ -1,0 +1,76 @@
+# The idp image is pinned by digest in deploy/docker-compose.yml. This checks that the
+# digest is still the one the kanidm/server:1.12.0 tag (multi-arch index) points to.
+#
+# Not a required check, and not part of ci.yml: it calls Docker Hub, and a registry
+# rate limit or outage must not turn every push and pull request red. It runs when the
+# compose file (or this file) changes, weekly, and on demand.
+name: Kanidm digest
+
+on:
+  push:
+    paths:
+      - deploy/docker-compose.yml
+      - .github/workflows/kanidm-digest.yml
+  pull_request:
+    paths:
+      - deploy/docker-compose.yml
+      - .github/workflows/kanidm-digest.yml
+  schedule:
+    - cron: "23 5 * * 1" # Mondays, 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kanidm-digest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kanidm-digest:
+    name: kanidm-digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KANIDM_TAG: kanidm/server:1.12.0
+      # Optional repository secrets. Forks and pull requests from forks have none:
+      # the login step is skipped and the lookup is anonymous.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to Docker Hub (only when the secrets exist)
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        run: printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+      - name: Pinned Kanidm digest matches kanidm/server:1.12.0 (multi-arch index)
+        run: |
+          pinned="$(sed -n 's|^ *image: kanidm/server@\(sha256:[0-9a-f]\{64\}\)$|\1|p' deploy/docker-compose.yml)"
+          if [ -z "$pinned" ]; then
+            echo "::error::no kanidm/server@sha256 pin found in deploy/docker-compose.yml"
+            exit 1
+          fi
+          # The registry lookup is retried with backoff (rate limits, short outages).
+          # A digest that differs is a real failure and is not retried.
+          actual=""
+          delay=15
+          for attempt in 1 2 3 4 5; do
+            if out="$(docker buildx imagetools inspect "$KANIDM_TAG" --format '{{json .Manifest}}')"; then
+              actual="$(printf '%s' "$out" | jq -r '.digest // empty')"
+              [ -n "$actual" ] && break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "attempt $attempt: no digest from the registry; retrying in ${delay}s"
+              sleep "$delay"
+              delay=$((delay * 2))
+            fi
+          done
+          if [ -z "$actual" ]; then
+            echo "::error::could not read the digest of $KANIDM_TAG after 5 attempts"
+            exit 1
+          fi
+          echo "pinned: $pinned"
+          echo "tag:    $actual"
+          if [ "$pinned" != "$actual" ]; then
+            echo "::error::deploy/docker-compose.yml pins $pinned, but $KANIDM_TAG is $actual"
+            exit 1
+          fi

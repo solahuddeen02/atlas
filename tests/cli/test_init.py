@@ -41,7 +41,7 @@ def test_creates_everything_with_strict_modes(secrets_dir: Path) -> None:
     for f in FILES:
         assert mode(secrets_dir / f) == 0o600, f
     assert sorted(str(p.relative_to(secrets_dir)) for p in secrets_dir.rglob("*")) == sorted(
-        ["atlas", "postgres", *FILES]
+        ["atlas", "idp-trust", "postgres", *FILES]
     )
 
 
@@ -58,15 +58,90 @@ def test_strict_modes_despite_permissive_umask(secrets_dir: Path) -> None:
 
 
 def test_byo_init_writes_no_idp_files(secrets_dir: Path, tmp_path: Path) -> None:
-    # Without the bundled IdP (no ATLAS_IDP_PUBLIC_URL) init is exactly as before 5a.
+    # Without the bundled IdP (no ATLAS_IDP_PUBLIC_URL) init writes no IdP files. The
+    # idp-trust directory exists, because atlas-proxy mounts it in both modes, and is empty.
     run_init(secrets_dir, backup_dir=tmp_path / "b")
-    for name in ("idp", "idp-ca", "idp-trust"):
+    for name in ("idp", "idp-ca"):
         assert not (secrets_dir / name).exists()
+    assert (secrets_dir / "idp-trust").is_dir()
+    assert list((secrets_dir / "idp-trust").iterdir()) == []
     assert list((tmp_path / "b").iterdir()) == []
     app_env = dotenv_values(secrets_dir / "atlas/app.env")
     # Phase 5b: the IdP bootstrap writes these; until then they are set by hand.
     assert "ATLAS_IDP_ADMIN_TOKEN" not in app_env
     assert "ATLAS_OIDC_CLIENT_SECRET" not in app_env
+
+
+# idp-trust/ (5b-0): atlas-proxy bind-mounts it in both modes, so init creates it in
+# both, instead of leaving it to Docker's creation of a missing mount source.
+
+
+def test_idp_trust_dir_is_created_once_and_reported(secrets_dir: Path) -> None:
+    report = run_init(secrets_dir)
+    assert "idp-trust/" in report.created
+    trust = secrets_dir / "idp-trust"
+    before = (trust.stat().st_mtime_ns, mode(trust))
+    again = run_init(secrets_dir)
+    assert "idp-trust/" not in again.created
+    assert (trust.stat().st_mtime_ns, mode(trust)) == before
+    assert list(trust.iterdir()) == []
+
+
+def test_idp_trust_dir_with_chown_is_world_readable(secrets_dir: Path) -> None:
+    import os
+
+    # The proxy (another uid) must be able to read it. The owner is whoever runs init:
+    # root in atlas-init, this user here.
+    run_init(secrets_dir, owners=owners_self())
+    trust = secrets_dir / "idp-trust"
+    assert mode(trust) == 0o755
+    assert (trust.stat().st_uid, trust.stat().st_gid) == (os.geteuid(), os.getegid())
+    assert list(trust.iterdir()) == []
+
+
+@pytest.mark.parametrize("chown", [False, True], ids=["plain", "chown"])
+def test_idp_trust_existing_contents_are_untouched(secrets_dir: Path, chown: bool) -> None:
+    trust = secrets_dir / "idp-trust"
+    trust.mkdir(parents=True)
+    trust.chmod(0o755)  # as Docker creates a missing bind-mount source
+    (trust / "ca.pem").write_text("operator-or-bundled-ca\n")
+    (trust / "ca.pem").chmod(0o644)
+    (trust / "notes").mkdir()
+    before = snapshot(trust)
+    for _ in range(2):
+        report = run_init(secrets_dir, owners=owners_self() if chown else None)
+        assert snapshot(trust) == before
+        assert mode(trust) == 0o755
+        assert "idp-trust/" not in report.created
+        assert not [w for w in report.warnings if "idp-trust" in w]
+
+
+def test_idp_trust_must_be_a_directory(secrets_dir: Path) -> None:
+    from atlas.kernel.cli.init import InitError
+
+    secrets_dir.mkdir(mode=0o700)
+    (secrets_dir / "idp-trust").write_text("")
+    with pytest.raises(InitError, match="idp-trust exists and is not a directory"):
+        run_init(secrets_dir)
+
+
+def test_operator_files_untouched_when_idp_trust_is_added(secrets_dir: Path) -> None:
+    # An install from before 5b-0 whose idp-trust/ is missing: init adds that directory
+    # and changes nothing else.
+    (secrets_dir / "atlas").mkdir(parents=True)
+    (secrets_dir / "postgres").mkdir()
+    (secrets_dir / "atlas/app.env").write_text(
+        "SECRET_KEY=operator-key\nDATABASE_URL=operator-db\n"
+        "ATLAS_MIGRATOR_DATABASE_URL=operator-migrator\n"
+    )
+    (secrets_dir / "atlas/connectors.env").write_text("")
+    (secrets_dir / "postgres/password").write_text("operator-pg")
+    before = snapshot(secrets_dir)
+
+    run_init(secrets_dir)
+    after = snapshot(secrets_dir)
+    assert set(after) - set(before) == {"idp-trust"}
+    assert {k: v for k, v in after.items() if k != "idp-trust"} == before
 
 
 def test_generated_values_pass_settings_validation(secrets_dir: Path) -> None:
@@ -96,6 +171,7 @@ def test_second_run_changes_nothing(secrets_dir: Path) -> None:
 def test_operator_files_untouched(secrets_dir: Path) -> None:
     (secrets_dir / "atlas").mkdir(parents=True)
     (secrets_dir / "postgres").mkdir()
+    (secrets_dir / "idp-trust").mkdir()  # an existing deployment has it (5b-0)
     app_env = secrets_dir / "atlas/app.env"
     app_env.write_text(
         "# mine\nSECRET_KEY=operator-key\nDATABASE_URL=operator-db\n"
