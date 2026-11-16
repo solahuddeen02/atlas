@@ -4,7 +4,7 @@ import os
 import stat
 import tomllib
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from cryptography import x509
@@ -178,6 +178,7 @@ def test_server_toml(secrets_dir: Path) -> None:
         "origin": "https://id.example.com",
         "bindaddress": "[::]:8443",
         "db_path": "/data/kanidm.db",
+        "adminbindpath": "/run/atlas-idp-admin/kanidmd.sock",
         "tls_chain": "/etc/atlas-idp/chain.pem",
         "tls_key": "/etc/atlas-idp/server.key",
         "log_level": "info",
@@ -322,3 +323,104 @@ def test_cli_invalid_idp_settings(
     assert main(["init", "--secrets-dir", str(secrets_dir)]) == 2
     assert "ATLAS_IDP_FRONT_SUBNET: must be a private range" in capsys.readouterr().err
     assert not secrets_dir.exists()
+
+
+# --- The admin-socket volume (PLAN Phase 5b-2) --------------------------------------
+
+
+def test_admin_socket_is_not_on_the_data_volume(secrets_dir: Path) -> None:
+    run_init(secrets_dir, idp=OPTS)
+    config = tomllib.loads((secrets_dir / "idp/server.toml").read_text())
+    socket = PurePosixPath(config["adminbindpath"])
+    data_dir = PurePosixPath(config["db_path"]).parent
+    assert socket.name == "kanidmd.sock"
+    # Its own directory (a volume of its own in the stack), outside Kanidm's data.
+    assert socket.parent == PurePosixPath("/run/atlas-idp-admin")
+    assert data_dir != socket.parent and data_dir not in socket.parents
+
+
+def test_chown_gives_the_admin_volume_to_the_idp_user(
+    secrets_dir: Path, backups: Path, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_chown(path: object, uid: int, gid: int) -> None:
+        calls.append((str(path), uid, gid))
+
+    admin = tmp_path / "idp-admin"
+    admin.mkdir(mode=0o755)  # as Docker creates a new volume
+    inside = admin / "kanidmd.sock"
+    inside.write_text("")
+    inside.chmod(0o750)
+    mp = pytest.MonkeyPatch()
+    mp.setattr(os, "chown", fake_chown)
+    try:
+        report = run_init(
+            secrets_dir,
+            backup_dir=backups,
+            owners=Ownership(),
+            idp=IdpOptions(**{**OPTS.__dict__, "admin_dir": admin}),
+        )
+    finally:
+        mp.undo()
+    owner = {Path(p).relative_to(tmp_path).as_posix(): (u, g) for p, u, g in calls}
+    assert owner["idp-admin"] == (10002, 10002)
+    assert mode(admin) == 0o700
+    # Only the volume's top directory: the socket inside is Kanidm's.
+    assert "idp-admin/kanidmd.sock" not in owner
+    assert mode(inside) == 0o750
+    assert report.warnings == []
+    # Without --idp-data-dir, no data volume is touched.
+    assert "idp-data" not in owner
+
+
+def test_admin_and_data_volumes_together(secrets_dir: Path, backups: Path, tmp_path: Path) -> None:
+    data, admin = tmp_path / "idp-data", tmp_path / "idp-admin"
+    data.mkdir(mode=0o755)
+    admin.mkdir(mode=0o755)
+    opts = IdpOptions(**{**OPTS.__dict__, "data_dir": data, "admin_dir": admin})
+    for _ in range(2):  # idempotent
+        report = run_init(secrets_dir, backup_dir=backups, owners=owners_self(), idp=opts)
+        assert (mode(data), mode(admin)) == (0o700, 0o700)
+        assert report.warnings == []
+
+
+def test_missing_admin_volume_is_an_error(secrets_dir: Path, tmp_path: Path) -> None:
+    opts = IdpOptions(**{**OPTS.__dict__, "admin_dir": tmp_path / "absent"})
+    with pytest.raises(InitError, match="idp admin-socket volume"):
+        run_init(secrets_dir, owners=owners_self(), idp=opts)
+
+
+def test_volumes_are_only_prepared_with_chown(secrets_dir: Path, tmp_path: Path) -> None:
+    admin = tmp_path / "idp-admin"
+    admin.mkdir(mode=0o755)
+    report = run_init(secrets_dir, idp=IdpOptions(**{**OPTS.__dict__, "admin_dir": admin}))
+    assert report.warnings == ["--idp-admin-dir is only prepared together with --chown"]
+    assert mode(admin) == 0o755
+    both = IdpOptions(**{**OPTS.__dict__, "admin_dir": admin, "data_dir": admin})
+    assert run_init(secrets_dir, idp=both).warnings == [
+        "--idp-data-dir is only prepared together with --chown",
+        "--idp-admin-dir is only prepared together with --chown",
+    ]
+
+
+def test_cli_admin_dir_flag(
+    secrets_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    admin = tmp_path / "idp-admin"
+    admin.mkdir()
+    args = ["init", "--secrets-dir", str(secrets_dir), "--idp-admin-dir", str(admin)]
+    # Like the other bundled-IdP flags, it needs the bundled IdP.
+    assert main(args) == 2
+    assert "ATLAS_IDP_PUBLIC_URL is not set" in capsys.readouterr().err
+    assert not secrets_dir.exists()
+
+    monkeypatch.setenv("ATLAS_ENV", "development")
+    monkeypatch.setenv("ATLAS_IDP_PUBLIC_URL", "https://id.example.com")
+    assert main(args) == 0
+    assert "warning: --idp-admin-dir is only prepared together with --chown" in (
+        capsys.readouterr().out
+    )

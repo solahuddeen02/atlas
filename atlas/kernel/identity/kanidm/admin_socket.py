@@ -15,8 +15,11 @@ RecoverAccount sets a new random password every time, so the previous one stops
 working. It also re-enables an account that DisableAccount disabled.
 
 Access is by file permission: in the bundled stack the socket is
-``/data/kanidmd.sock``, mode 0750 in a 0700 directory, both owned by the idp user.
-Only root or that user can connect.
+``/run/atlas-idp-admin/kanidmd.sock`` on its own volume (`adminbindpath` in
+server.toml), mode 0750 in a 0700 directory, both owned by the idp user (uid 10002).
+A container that mounts only that volume, not Kanidm's database, connects as that
+user, also when the volume is mounted read-only. Root connects only with
+CAP_DAC_OVERRIDE; any other user gets EACCES.
 
 Both answers are treated as secret-bearing: no error carries any byte of a reply.
 """
