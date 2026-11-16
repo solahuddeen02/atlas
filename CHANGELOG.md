@@ -42,6 +42,11 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - `atlas-backup` copies Kanidm's newest online backup into each backup set. `atlas-admin restore` checks the Kanidm version and prints the offline IdP restore steps;
   - settings `ATLAS_IDP_PUBLIC_URL`, `ATLAS_IDP_FRONT_SUBNET`, `ATLAS_IDP_BACKUP_SCHEDULE`, `ATLAS_IDP_BACKUP_VERSIONS`, `ATLAS_RATE_LIMIT_IDP_AUTH` and `ATLAS_IDENTITY_ADMIN`. The OIDC issuer defaults from the IdP URL;
   - not yet: the IdP bootstrap (OAuth2 clients, service account, groups) and login (Phase 5b). Until then `ATLAS_OIDC_CLIENT_SECRET` is still set by hand.
+- **Kanidm client library** (Phase 5b-1, [ADR-001](docs/adr/001-identity.md)), `atlas.kernel.identity.kanidm`:
+  - REST calls to the bundled IdP, always verified against its internal CA: login for the built-in service accounts, service accounts and API tokens, groups, OAuth2 clients;
+  - the admin unix socket (`RecoverAccount`, `DisableAccount`);
+  - typed errors, and no credential in a log, an error message or a `repr`;
+  - no service uses it yet: the IdP bootstrap (5b-2) is its first caller.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -51,6 +56,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
 - Milestones are named Foundation, First modules and Household apps instead of v1/v2/v3, and releases follow SemVer.
 
 - `atlas-init` now creates `secrets/idp-trust/` itself (root, `0755`) in both modes, because atlas-proxy always mounts it. Before, in bring-your-own OIDC mode the directory appeared only as a side effect of that mount. Without the bundled IdP it stays empty.
+- `httpx` is now a runtime dependency of the Atlas image (the Kanidm client uses it). It was a development dependency before.
 - The check that the pinned Kanidm digest still matches its tag moved out of the `compose` CI job into its own workflow (`kanidm-digest`). It runs when `deploy/docker-compose.yml` changes, weekly and on demand, retries registry errors, and is not a required check, so a Docker Hub rate limit no longer fails unrelated pull requests.
 
 ### Fixed
