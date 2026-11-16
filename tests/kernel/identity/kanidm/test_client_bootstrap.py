@@ -42,7 +42,7 @@ from tests.kernel.identity.kanidm.fakes import (
 GROUP_UUID = "96d5f73e-4759-4f79-9f77-7bbf44a2f34b"
 CLIENT_UUID = "bc7b3d10-c4f8-4554-b263-a5bc4ede8873"
 ACCOUNT_UUID = "d293324c-58bb-47b3-83ed-d66607b9b21d"
-TOKEN_ID = "42b598e9-f847-42ac-ba2e-6059246e803a"
+LISTED_ID = "42b598e9-f847-42ac-ba2e-6059246e803a"
 IDM_ADMINS_UUID = "00000000-0000-0000-0000-000000000001"
 APP_REDIRECT = "app.immich:///oauth-callback"
 
@@ -330,13 +330,13 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
 
     async def calls(client: KanidmClient) -> None:
         await client.remove_oauth2_redirect_url("atlas", "https://atlas.example.com/old")
-        await client.delete_api_token("atlas-console", TOKEN_ID)
+        await client.delete_api_token("atlas-console", LISTED_ID)
 
     call_with(handler, ca_file, calls)
     deletes = [(r.url.path, body_of(r)) for r in handler.requests if r.method == "DELETE"]
     assert deletes == [
         ("/v1/oauth2/atlas/_attr/oauth2_rs_origin", ["https://atlas.example.com/old"]),
-        (f"/v1/service_account/atlas-console/_api_token/{TOKEN_ID}", None),
+        (f"/v1/service_account/atlas-console/_api_token/{LISTED_ID}", None),
     ]
 
 
@@ -345,12 +345,12 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
 
 def test_delete_api_token(ca_file: Path) -> None:
     handler = Recorder()
-    deleted = call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", TOKEN_ID))
+    deleted = call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", LISTED_ID))
     assert deleted is True
     request = handler.last
     assert (request.method, request.url.path, request.content) == (
         "DELETE",
-        f"/v1/service_account/atlas-console/_api_token/{TOKEN_ID}",
+        f"/v1/service_account/atlas-console/_api_token/{LISTED_ID}",
         b"",
     )
     assert request.headers["authorization"] == f"Bearer {BEARER}"
@@ -358,14 +358,22 @@ def test_delete_api_token(ca_file: Path) -> None:
 
 def test_deleting_a_token_that_is_gone_is_false_not_an_error(ca_file: Path) -> None:
     handler = respond(404, "nomatchingentries")
-    deleted = call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", TOKEN_ID))
+    deleted = call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", LISTED_ID))
     assert deleted is False
     assert len(handler.requests) == 1
 
 
 @pytest.mark.parametrize(
     "token_id",
-    ["", "not-a-uuid", "atlas-console", TOKEN_ID.upper(), TOKEN_ID + "0", f"../{TOKEN_ID}", None],
+    [
+        "",
+        "not-a-uuid",
+        "atlas-console",
+        LISTED_ID.upper(),
+        LISTED_ID + "0",
+        f"../{LISTED_ID}",
+        None,
+    ],
 )
 def test_a_token_id_must_be_a_uuid(token_id: str, ca_file: Path) -> None:
     handler = Recorder()
@@ -389,7 +397,7 @@ def test_delete_api_token_errors(
 ) -> None:
     handler = Recorder(lambda request: response)
     with pytest.raises(KanidmError) as caught:
-        call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", TOKEN_ID))
+        call_with(handler, ca_file, lambda c: c.delete_api_token("atlas-console", LISTED_ID))
     assert type(caught.value) is error
     assert caught.value.operation == "DELETE /v1/service_account/{id}/_api_token/{token_id}"
 
@@ -411,15 +419,15 @@ TOKEN_PAYLOAD = {
     "issued_at": 1794744000,
     "label": "atlas-console",
     "purpose": "readwrite",
-    "token_id": TOKEN_ID,
+    "token_id": LISTED_ID,
 }
 
 
 def test_api_token_id_reads_the_tokens_own_id() -> None:
-    assert api_token_id(SecretStr(jws(TOKEN_PAYLOAD))) == TOKEN_ID
+    assert api_token_id(SecretStr(jws(TOKEN_PAYLOAD))) == LISTED_ID
     # Any payload length: the base64 padding is restored.
     for label in ("a", "ab", "abc", "abcd"):
-        assert api_token_id(SecretStr(jws({**TOKEN_PAYLOAD, "label": label}))) == TOKEN_ID
+        assert api_token_id(SecretStr(jws({**TOKEN_PAYLOAD, "label": label}))) == LISTED_ID
 
 
 @pytest.mark.parametrize(
@@ -433,16 +441,16 @@ def test_api_token_id_reads_the_tokens_own_id() -> None:
         "a..c",
         jws(None, raw=b"not json"),
         jws(None, raw=b"\xff\xfe"),
-        jws(["token_id", TOKEN_ID]),
+        jws(["token_id", LISTED_ID]),
         jws("a string"),
         jws({"label": "no id"}),
         jws({"token_id": 7}),
         jws({"token_id": None}),
         jws({"token_id": "not-a-uuid"}),
-        jws({"token_id": TOKEN_ID.upper()}),
-        jws({"token_id": f"../{TOKEN_ID}"}),
+        jws({"token_id": LISTED_ID.upper()}),
+        jws({"token_id": f"../{LISTED_ID}"}),
         # A session bearer (what login() returns) names a session, not an API token.
-        jws({"session_id": TOKEN_ID}),
+        jws({"session_id": LISTED_ID}),
     ],
 )
 def test_api_token_id_of_anything_else_is_none(token: str) -> None:
@@ -453,7 +461,7 @@ def test_api_token_id_keeps_the_token_out_of_logs(caplog: pytest.LogCaptureFixtu
     debug_logging(caplog)
     good, bad = jws(TOKEN_PAYLOAD), jws(None, raw=b'{"token_id": ')
     results = (api_token_id(SecretStr(good)), api_token_id(SecretStr(bad)))
-    assert results == (TOKEN_ID, None)
+    assert results == (LISTED_ID, None)
     secrets = [part for token in (good, bad) for part in token.split(".")]
     assert_no_secret(secrets, caplog, results)
 
@@ -474,7 +482,7 @@ def test_every_id_may_be_a_uuid(ca_file: Path) -> None:
         await client.get_service_account(ACCOUNT_UUID)
         await client.list_api_tokens(ACCOUNT_UUID)
         await client.issue_api_token(ACCOUNT_UUID, label="x", read_write=True)
-        await client.delete_api_token(ACCOUNT_UUID, TOKEN_ID)
+        await client.delete_api_token(ACCOUNT_UUID, LISTED_ID)
         await client.add_group_attr(GROUP_UUID, "class", ["account_policy"])
         await client.set_group_attr(GROUP_UUID, "credential_type_minimum", ["mfa"])
         await client.add_group_members(GROUP_UUID, [ACCOUNT_UUID])
@@ -489,7 +497,7 @@ def test_every_id_may_be_a_uuid(ca_file: Path) -> None:
         ("GET", f"/v1/service_account/{ACCOUNT_UUID}"),
         ("GET", f"/v1/service_account/{ACCOUNT_UUID}/_api_token"),
         ("POST", f"/v1/service_account/{ACCOUNT_UUID}/_api_token"),
-        ("DELETE", f"/v1/service_account/{ACCOUNT_UUID}/_api_token/{TOKEN_ID}"),
+        ("DELETE", f"/v1/service_account/{ACCOUNT_UUID}/_api_token/{LISTED_ID}"),
         ("POST", f"/v1/group/{GROUP_UUID}/_attr/class"),
         ("PUT", f"/v1/group/{GROUP_UUID}/_attr/credential_type_minimum"),
         ("POST", f"/v1/group/{GROUP_UUID}/_attr/member"),
@@ -554,7 +562,7 @@ def test_ids_are_validated_before_any_request(value: str, ca_file: Path) -> None
             client.get_service_account(value),
             client.list_api_tokens(value),
             client.issue_api_token(value, label="x", read_write=True),
-            client.delete_api_token(value, TOKEN_ID),
+            client.delete_api_token(value, LISTED_ID),
             client.set_group_attr(value, "credential_type_minimum", ["mfa"]),
             client.add_group_members(value, ["someone"]),
             client.set_oauth2_scope_map("atlas", value, ["openid"]),
