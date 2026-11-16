@@ -100,7 +100,8 @@ CLOCK_SKEW = timedelta(minutes=5)
 
 ROTATE_HINT = (
     "run `docker compose run --rm atlas-idp-init atlas-admin init --secrets-dir=/secrets "
-    "--backup-dir=/backups --chown --idp-data-dir=/idp-data --idp-admin-dir=/idp-admin --rotate-idp-cert`"
+    "--backup-dir=/backups --chown --idp-data-dir=/idp-data --idp-admin-dir=/idp-admin "
+    "--rotate-idp-cert`"
 )
 
 
