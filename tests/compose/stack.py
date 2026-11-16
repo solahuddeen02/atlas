@@ -102,6 +102,8 @@ class Stack:
         self.backup_dir = self.workdir / "backups"
         self.volume = f"{self.project}_pgdata"
         self.idp_volume = f"{self.project}_idp"
+        # Not external: Compose creates it, so destroy() removes it by name.
+        self.idp_admin_volume = f"{self.project}_idp-admin"
         self.env_file = self.workdir / "stack.env"
         idp_env = []
         if self.idp:
@@ -374,7 +376,18 @@ class Stack:
                 timeout=DOWN_TIMEOUT,
             )
         with contextlib.suppress(HarnessTimeout):
-            run(["docker", "volume", "rm", "-f", self.volume, self.idp_volume], check=False)
+            run(
+                [
+                    "docker",
+                    "volume",
+                    "rm",
+                    "-f",
+                    self.volume,
+                    self.idp_volume,
+                    self.idp_admin_volume,
+                ],
+                check=False,
+            )
         # Files under secrets/ and backups/ belong to container uids now; remove them
         # as root inside a container so pytest's tmp cleanup doesn't fail.
         with contextlib.suppress(HarnessTimeout):

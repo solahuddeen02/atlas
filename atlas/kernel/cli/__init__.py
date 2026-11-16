@@ -38,9 +38,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
             backup_schedule=settings.idp_backup_schedule,
             backup_versions=settings.idp_backup_versions,
             data_dir=args.idp_data_dir,
+            admin_dir=args.idp_admin_dir,
             rotate_cert=args.rotate_idp_cert,
         )
-    elif args.rotate_idp_cert or args.idp_data_dir is not None:
+    elif args.rotate_idp_cert or args.idp_data_dir is not None or args.idp_admin_dir is not None:
         print(
             "atlas-admin init: ATLAS_IDP_PUBLIC_URL is not set, but the bundled IdP needs it "
             "(set it in deploy/.env, or remove bundled-idp from COMPOSE_PROFILES for BYO OIDC)",
@@ -88,6 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--idp-data-dir",
         type=Path,
         help="Bundled IdP: the idp data volume, owned by the idp user (with --chown).",
+    )
+    init.add_argument(
+        "--idp-admin-dir",
+        type=Path,
+        help="Bundled IdP: the volume for Kanidm's admin socket, owned by the idp user "
+        "(with --chown).",
     )
     init.add_argument(
         "--rotate-idp-cert",

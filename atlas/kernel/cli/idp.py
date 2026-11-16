@@ -11,6 +11,14 @@ Only with the bundled IdP (ATLAS_IDP_PUBLIC_URL set). Under the secrets dir:
 | `idp/server.toml` | Kanidm's whole configuration (no secrets) | idp, read-only | root:idp, 0440 |
 | `idp-trust/ca.pem` | The CA certificate (public) | atlas-proxy, later api | root, 0644 (0755) |
 
+Two Docker volumes, mounted into atlas-idp-init only so that it can give their top
+directory to the idp user (idp:idp, 0700); init never looks inside them:
+
+| Flag | Volume | Holds |
+|---|---|---|
+| `--idp-data-dir` | idp-data | Kanidm's database |
+| `--idp-admin-dir` | idp-admin | Kanidm's admin unix socket, and nothing else |
+
 Under the backups dir:
 
 | Path | What | Owner, mode |
@@ -73,6 +81,9 @@ RESTORE_DIR = "idp-restore"
 CONTAINER_CONFIG_DIR = "/etc/atlas-idp"
 CONTAINER_CONFIG = f"{CONTAINER_CONFIG_DIR}/server.toml"
 CONTAINER_DATA_DIR = "/data"
+# The admin socket has its own volume, so that the IdP bootstrap (Phase 5b-2) can
+# reach it without mounting Kanidm's database. Kanidm's default is /data/kanidmd.sock.
+CONTAINER_ADMIN_SOCKET = "/run/atlas-idp-admin/kanidmd.sock"
 CONTAINER_ONLINE_BACKUP_DIR = "/var/lib/atlas-idp-backups"
 CONTAINER_RESTORE_DIR = "/restore"
 # Kanidm's healthcheck (`kanidmd scripting healthcheck`) connects to its first
@@ -89,7 +100,8 @@ CLOCK_SKEW = timedelta(minutes=5)
 
 ROTATE_HINT = (
     "run `docker compose run --rm atlas-idp-init atlas-admin init --secrets-dir=/secrets "
-    "--backup-dir=/backups --chown --idp-data-dir=/idp-data --rotate-idp-cert`"
+    "--backup-dir=/backups --chown --idp-data-dir=/idp-data --idp-admin-dir=/idp-admin "
+    "--rotate-idp-cert`"
 )
 
 
@@ -101,6 +113,8 @@ class IdpOptions:
     backup_versions: int
     # The idp data volume (mounted into atlas-idp-init); prepared only with --chown.
     data_dir: Path | None = None
+    # The admin-socket volume (also mounted into atlas-idp-init); as data_dir.
+    admin_dir: Path | None = None
     rotate_cert: bool = False
 
 
@@ -352,6 +366,7 @@ def render_server_toml(opts: IdpOptions) -> str:
         f"origin = {_toml_str(opts.public_url)}",
         f"bindaddress = {_toml_str(BIND_ADDRESS)}",
         f"db_path = {_toml_str(CONTAINER_DATA_DIR + '/kanidm.db')}",
+        f"adminbindpath = {_toml_str(CONTAINER_ADMIN_SOCKET)}",
         f"tls_chain = {_toml_str(CONTAINER_CONFIG_DIR + '/chain.pem')}",
         f"tls_key = {_toml_str(CONTAINER_CONFIG_DIR + '/server.key')}",
         'log_level = "info"',
@@ -409,6 +424,12 @@ def _apply_ownership(
             raise InitError(f"{opts.data_dir} (the idp data volume) is not mounted")
         # Only the volume's top directory: what is inside belongs to Kanidm.
         _set_owner(opts.data_dir, owners.idp_uid, owners.idp_gid, 0o700)
+    if opts.admin_dir is not None:
+        if not opts.admin_dir.is_dir():
+            raise InitError(f"{opts.admin_dir} (the idp admin-socket volume) is not mounted")
+        # Docker creates a new volume root-owned, and Kanidm (uid 10002) cannot create
+        # its socket there. 0700: only the idp user reaches the socket inside.
+        _set_owner(opts.admin_dir, owners.idp_uid, owners.idp_gid, 0o700)
 
 
 def ensure_idp(
@@ -433,5 +454,7 @@ def ensure_idp(
         _ensure_plain_dir(backup_dir / RESTORE_DIR, report, f"{RESTORE_DIR}/")
     if owners is not None:
         _apply_ownership(root, backup_dir, opts, owners)
-    elif opts.data_dir is not None:
-        report.warnings.append("--idp-data-dir is only prepared together with --chown")
+    else:
+        for flag, path in (("--idp-data-dir", opts.data_dir), ("--idp-admin-dir", opts.admin_dir)):
+            if path is not None:
+                report.warnings.append(f"{flag} is only prepared together with --chown")

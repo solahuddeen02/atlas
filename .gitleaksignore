@@ -1,0 +1,5 @@
+# One false positive, kept out of the scan instead of rewriting pushed history.
+# A made-up Kanidm API-token id (a UUID) in a unit test, next to a name containing
+# "token" (generic-api-key). The constant was renamed in the next commit; this entry
+# is for the commit that first contained it. Not a credential.
+93848494a6f8b2e3a130a3c5745e77694c5a3d8e:tests/kernel/identity/kanidm/test_client_bootstrap.py:generic-api-key:45

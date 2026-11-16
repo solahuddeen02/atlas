@@ -14,8 +14,8 @@ MakeStack = Callable[..., Stack]
 
 IDP_UID = "10002:10002"
 
-# Runs in a one-off Atlas container as the idp user, on idp-back, with the idp volume
-# (for the admin socket) and the public CA certificate. It prints outcomes only: the
+# Runs in a one-off Atlas container as the idp user, on idp-back, with the idp-admin
+# volume (for the admin socket) and the public CA certificate. It prints outcomes only: the
 # recovered password and the bearer never leave the container.
 CLIENT_SCRIPT = """
 import asyncio, json
@@ -27,7 +27,8 @@ GROUP = "atlas_client_test"
 async def main():
     out = {}
     # The first credential comes from the admin socket: no bootstrap has run yet.
-    password = await AdminSocket(Path("/data/kanidmd.sock")).recover_account("idm_admin")
+    socket = AdminSocket(Path("/run/atlas-idp-admin/kanidmd.sock"))
+    password = await socket.recover_account("idm_admin")
     async with KanidmClient(base_url="https://idp:8443", ca_file=Path("/ca/ca.pem")) as client:
         await client.login("idm_admin", password)
         out["missing"] = await client.get_group(GROUP)
@@ -77,7 +78,7 @@ def test_kanidm_client_against_the_real_idp(make_stack: MakeStack) -> None:
             "--network",
             f"{stack.project}_idp-back",
             "-v",
-            f"{stack.idp_volume}:/data",
+            f"{stack.idp_admin_volume}:/run/atlas-idp-admin",
             "-v",
             f"{stack.secrets_dir}/idp-trust:/ca:ro",
             "--entrypoint",

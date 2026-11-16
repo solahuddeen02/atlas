@@ -14,6 +14,32 @@ deploy/docker-compose.yml):
   second token. List first. Token times (`expiry`, `issued_at`) are Unix seconds.
 - Attribute, member, redirect-URL and scope-map writes are idempotent.
 
+Added for the IdP bootstrap (PLAN Phase 5b-2), checked the same way:
+
+- Groups and service accounts are addressed by name or by UUID, also where a group
+  is a parameter (scope map, `entry_managed_by`, members). A GET with an unknown
+  UUID is `200 null`, like an unknown name. Kanidm answers with SPNs
+  (`name@domain`) in `member` and `oauth2_rs_scope_map`, and with a UUID in
+  `entry_managed_by`, whichever form the request used.
+- An OAuth2 client is addressed by NAME ONLY. Given its UUID, Kanidm answers `GET`
+  and `_basic_secret` with `200 null`, `PATCH` and scope-map writes with 404, and
+  redirect-URL writes with a silent 200 that changes nothing. So this module
+  refuses a UUID there instead of passing it on.
+- A redirect URL may have an app's private-use scheme (`app.immich:///oauth-callback`).
+  Kanidm also accepts `http://` there, so refusing it is this module's job.
+- An OAuth2 client's settings are written with `PATCH /v1/oauth2/{id}` and a body of
+  `{"attrs": {name: [value]}}`: 200, and the same body again is 200. An attribute
+  Kanidm does not know is 400, a missing client 404. `GET` and `PUT` on
+  `/v1/oauth2/{id}/_attr/{attr}` are 405. A `DELETE` there with no body removes the
+  whole attribute, whatever it is, so this module has no call for it.
+- A new client has neither `oauth2_allow_insecure_client_disable_pkce` nor
+  `oauth2_jwt_legacy_crypto_enable`: PKCE is required and legacy crypto is off until
+  one of them says `true`.
+- `DELETE /v1/service_account/{id}/_api_token/{token_id}` is 200, then 404 for the
+  same id. A deleted token that is less than 300 seconds old keeps working until it
+  reaches that age; an older one stops at once.
+- An API token is a JWS whose payload names its own `token_id`.
+
 Rules this module keeps:
 
 - TLS is always verified against the CA file passed in. There is no way to turn
@@ -28,6 +54,7 @@ Rules this module keeps:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -97,6 +124,10 @@ ENTRY_ATTRIBUTES: Mapping[EntryKind, frozenset[str]] = {
             "class",
             "displayname",
             "name",
+            # "true" lets the client skip PKCE; absent or "false" requires it.
+            "oauth2_allow_insecure_client_disable_pkce",
+            # "true" signs with RS256 instead of ES256; absent or "false" is ES256.
+            "oauth2_jwt_legacy_crypto_enable",
             "oauth2_rs_origin",
             "oauth2_rs_origin_landing",
             "oauth2_rs_scope_map",
@@ -111,7 +142,14 @@ DETAIL_LIMIT = 200
 SESSION_HEADER = "X-KANIDM-AUTH-SESSION-ID"
 
 _NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _ATTR = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# A private-use URI scheme (RFC 8252 section 7.1): a reversed domain name, so it has a
+# dot. That keeps out every registered scheme (http, javascript, data, file, ...).
+_APP_REDIRECT = re.compile(r"[a-z][a-z0-9+-]*(?:\.[a-z0-9+-]+)+:[!-~]+")
+# One value of oauth2_rs_scope_map, as Kanidm 1.12.0 prints it:
+#   atlas_users@id.example.com: {"openid", "profile"}
+_SCOPE_MAP = re.compile(r'([^\s:]+): \{((?:"[^"\s]+"(?:, "[^"\s]+")*)?)\}')
 _LOGIN_DENIALS: Mapping[str, AuthFailure] = {
     "incorrect password": "incorrect_password",
     "account expired": "account_expired",
@@ -157,6 +195,24 @@ class Entry:
     def uuid(self) -> str | None:
         return self.first("uuid")
 
+    @property
+    def scope_maps(self) -> dict[str, frozenset[str]]:
+        """An OAuth2 client's scope maps: the group's SPN (`name@domain`) -> its scopes.
+
+        Kanidm answers with the SPN also when the map was set by the group's UUID.
+        A value in another format is a KanidmProtocolError, never skipped: a caller
+        that removes unexpected scope maps must see every one of them.
+        """
+        maps: dict[str, frozenset[str]] = {}
+        for value in self.attrs.get("oauth2_rs_scope_map", ()):
+            match = _SCOPE_MAP.fullmatch(value)
+            if match is None:
+                raise KanidmProtocolError(
+                    "unexpected scope map format", operation="read oauth2_rs_scope_map"
+                )
+            maps[match.group(1)] = frozenset(re.findall(r'"([^"]+)"', match.group(2)))
+        return maps
+
     def __repr__(self) -> str:
         return f"Entry(kind={self.kind!r}, name={self.name!r}, attributes={sorted(self.attrs)})"
 
@@ -191,9 +247,21 @@ def parse_entry(kind: EntryKind, data: object) -> Entry | None:
 
 
 def _name(value: str, what: str = "name") -> str:
-    if not isinstance(value, str) or not _NAME.fullmatch(value):
+    # A UUID that starts with a letter would also fit the pattern. Kanidm never has
+    # a name shaped like a UUID, and where only a name works (a new object, an
+    # OAuth2 client) it must not be mistaken for one.
+    if not isinstance(value, str) or not _NAME.fullmatch(value) or _UUID.fullmatch(value):
         raise ValueError(f"invalid Kanidm {what}: lowercase letters, digits, '_' and '-' only")
     return value
+
+
+def _id(value: str, what: str = "id") -> str:
+    """An existing object's name or its UUID. New objects get a name (`_name`)."""
+    if isinstance(value, str) and (_NAME.fullmatch(value) or _UUID.fullmatch(value)):
+        return value
+    raise ValueError(
+        f"invalid Kanidm {what}: a name (lowercase letters, digits, '_' and '-') or a UUID"
+    )
 
 
 def _values(values: Sequence[str], what: str) -> list[str]:
@@ -209,6 +277,44 @@ def _https_url(value: str, what: str) -> str:
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
         raise ValueError(f"{what} must be an https:// URL without credentials")
     return value
+
+
+def _redirect_uri(value: str) -> str:
+    """An https:// URL, or a URI with an app's private-use scheme (RFC 8252 §7.1).
+
+    Kanidm itself would accept http:// here; this is where it is refused.
+    """
+    if not isinstance(value, str):
+        raise ValueError("url must be a string")
+    if "#" not in value and _APP_REDIRECT.fullmatch(value):
+        return value
+    parts = urlsplit(value)
+    if parts.scheme == "https" and parts.hostname and not parts.username and not parts.password:
+        return value
+    raise ValueError(
+        "url must be an https:// URL without credentials, or a URI with an app's "
+        "private-use scheme (one that contains a dot, e.g. app.immich:///oauth-callback)"
+    )
+
+
+def api_token_id(token: SecretStr) -> str | None:
+    """The `token_id` an API token names in its own payload, or None.
+
+    Says which entry of `list_api_tokens` a stored token is. The signature is not
+    checked: the answer tells tokens apart, it proves nothing about the token. Never
+    raises and never logs, so no part of the token can end up in an error or a log.
+    """
+    parts = token.get_secret_value().split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:  # also binascii.Error and UnicodeDecodeError
+        return None
+    token_id = payload.get("token_id") if isinstance(payload, dict) else None
+    if isinstance(token_id, str) and _UUID.fullmatch(token_id):
+        return token_id
+    return None
 
 
 def _is_tls_failure(exc: BaseException) -> bool:
@@ -413,7 +519,9 @@ class KanidmClient:
         # An OAuth2 client's entry includes its secret (dropped by the allowlist), so
         # nothing from that response may reach an error either.
         sensitive = kind == "oauth2_client"
-        data, _ = await self._call("GET", template, path={"id": _name(name)}, sensitive=sensitive)
+        # Kanidm resolves an OAuth2 client by name only (see the module docstring).
+        ident = _name(name) if kind == "oauth2_client" else _id(name)
+        data, _ = await self._call("GET", template, path={"id": ident}, sensitive=sensitive)
         if data is None:
             return None
         entry = parse_entry(kind, data)
@@ -485,17 +593,20 @@ class KanidmClient:
     async def create_service_account(
         self, name: str, *, display_name: str, managed_by: str
     ) -> None:
-        """Create a service account managed by the group `managed_by` (409 if it exists)."""
+        """Create a service account managed by the group `managed_by` (409 if it exists).
+
+        `managed_by` is the group's name or UUID. Kanidm answers with its UUID.
+        """
         attrs = {
             "name": [_name(name)],
             "displayname": [display_name],
-            "entry_managed_by": [_name(managed_by, "managed_by")],
+            "entry_managed_by": [_id(managed_by, "managed_by")],
         }
         await self._write("POST", "/v1/service_account", path={}, body={"attrs": attrs})
 
     async def list_api_tokens(self, account: str) -> list[ApiTokenInfo]:
         template = "/v1/service_account/{id}/_api_token"
-        data, _ = await self._call("GET", template, path={"id": _name(account)})
+        data, _ = await self._call("GET", template, path={"id": _id(account, "account")})
         tokens: list[ApiTokenInfo] = []
         items = data if isinstance(data, list) else None
         for item in items or []:
@@ -551,13 +662,33 @@ class KanidmClient:
             "compact": False,
         }
         data, _ = await self._call(
-            "POST", template, path={"id": _name(account)}, body=body, sensitive=True
+            "POST", template, path={"id": _id(account, "account")}, body=body, sensitive=True
         )
         if not isinstance(data, str) or not data:
             raise KanidmProtocolError(
                 "the response is not a token", operation=f"POST {template}", status=200
             )
         return SecretStr(data)
+
+    async def delete_api_token(self, account: str, token_id: str) -> bool:
+        """Delete one API token. True if it was deleted, False if Kanidm has no such
+        token (404): deleting twice is safe.
+
+        `token_id` comes from `list_api_tokens` or `api_token_id`. Kanidm keeps
+        accepting a deleted token until the token is 300 seconds old, so one issued a
+        moment ago is not refused at once. A missing account is also a 404, so False
+        does not prove the account exists.
+        """
+        if not isinstance(token_id, str) or not _UUID.fullmatch(token_id):
+            raise ValueError("token_id must be a UUID")
+        template = "/v1/service_account/{id}/_api_token/{token_id}"
+        path = {"id": _id(account, "account"), "token_id": token_id}
+        missing = False
+        try:
+            await self._call("DELETE", template, path=path)
+        except KanidmNotFound:
+            missing = True
+        return not missing
 
     # --- groups ------------------------------------------------------------------
 
@@ -587,7 +718,7 @@ class KanidmClient:
         await self._write(
             method,
             "/v1/group/{id}/_attr/{attr}",
-            path={"id": _name(group), "attr": attr},
+            path={"id": _id(group, "group"), "attr": attr},
             body=_values(values, attr),
         )
 
@@ -608,8 +739,54 @@ class KanidmClient:
         }
         await self._write("POST", "/v1/oauth2/_basic", path={}, body={"attrs": attrs})
 
+    async def update_oauth2_client(
+        self,
+        name: str,
+        *,
+        landing_url: str | None = None,
+        strict_redirect_uri: bool | None = None,
+        legacy_crypto: bool | None = None,
+        require_pkce: bool | None = None,
+    ) -> None:
+        """Set the given settings of an OAuth2 client in one request. Idempotent.
+
+        An argument left at None is not touched. These four are the only attributes
+        this client writes this way:
+
+        - `landing_url`: the https:// URL Kanidm sends users to, and a redirect URL.
+        - `strict_redirect_uri`: redirect URLs must match exactly.
+        - `legacy_crypto`: sign with RS256 instead of ES256.
+        - `require_pkce`: False lets the client skip PKCE. (The attribute Kanidm
+          stores is the opposite, `oauth2_allow_insecure_client_disable_pkce`.)
+
+        A missing client is KanidmNotFound.
+        """
+        attrs: dict[str, list[str]] = {}
+        if landing_url is not None:
+            attrs["oauth2_rs_origin_landing"] = [_https_url(landing_url, "landing_url")]
+        flags = (
+            ("oauth2_strict_redirect_uri", strict_redirect_uri, False),
+            ("oauth2_jwt_legacy_crypto_enable", legacy_crypto, False),
+            ("oauth2_allow_insecure_client_disable_pkce", require_pkce, True),
+        )
+        for attr, value, inverted in flags:
+            if value is None:
+                continue
+            if not isinstance(value, bool):
+                raise ValueError(f"{attr} takes True or False")
+            attrs[attr] = ["true" if value != inverted else "false"]
+        if not attrs:
+            raise ValueError("update_oauth2_client needs at least one setting")
+        await self._write(
+            "PATCH", "/v1/oauth2/{id}", path={"id": _name(name)}, body={"attrs": attrs}
+        )
+
     async def add_oauth2_redirect_url(self, name: str, url: str) -> None:
-        """Allow one more redirect URL. Idempotent."""
+        """Allow one more redirect URL. Idempotent.
+
+        `url` is an https:// URL, or a URI with an app's private-use scheme such as
+        `app.immich:///oauth-callback`. Anything else, http:// included, is a ValueError.
+        """
         await self._redirect_url("POST", name, url)
 
     async def remove_oauth2_redirect_url(self, name: str, url: str) -> None:
@@ -617,19 +794,25 @@ class KanidmClient:
         await self._redirect_url("DELETE", name, url)
 
     async def _redirect_url(self, method: str, name: str, url: str) -> None:
+        # Always with the one URL as the body: a DELETE without a body would remove
+        # the whole attribute.
         await self._write(
             method,
             "/v1/oauth2/{id}/_attr/oauth2_rs_origin",
             path={"id": _name(name)},
-            body=[_https_url(url, "url")],
+            body=[_redirect_uri(url)],
         )
 
     async def set_oauth2_scope_map(self, name: str, group: str, scopes: Sequence[str]) -> None:
-        """Set the scopes members of `group` get from this client. Idempotent."""
+        """Set the scopes members of `group` get from this client. Idempotent.
+
+        `name` is the client's name. `group` is the group's name or UUID.
+        `Entry.scope_maps` reads the result back.
+        """
         await self._write(
             "POST",
             "/v1/oauth2/{id}/_scopemap/{group}",
-            path={"id": _name(name), "group": _name(group, "group")},
+            path={"id": _name(name), "group": _id(group, "group")},
             body=_values(scopes, "scopes"),
         )
 

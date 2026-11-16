@@ -240,7 +240,7 @@ With `COMPOSE_PROFILES=bundled-idp` (the default), the stack runs [Kanidm](https
 
 | Service | What it does |
 |---|---|
-| `atlas-idp-init` | One-shot, as root and with no network, like `atlas-init`. Writes the internal CA, the IdP's TLS key and certificate, and Kanidm's `server.toml`, and gives the IdP volume and backup directories to the IdP's user |
+| `atlas-idp-init` | One-shot, as root and with no network, like `atlas-init`. Writes the internal CA, the IdP's TLS key and certificate, and Kanidm's `server.toml`, and gives the IdP's two volumes (database, admin socket) and its backup directories to the IdP's user |
 | `idp` | Kanidm, pinned by digest. Runs as **uid/gid 10002** (the upstream image would run as root), with a read-only root filesystem. Its healthcheck verifies TLS (`kanidmd scripting healthcheck -v`) |
 
 **Networks.** Neither network has internet access:
@@ -282,11 +282,18 @@ This covers the host's own network stack. Anyone who can run Docker commands on 
 | `backups/idp-online/` | Kanidm's online backups (gzip). **They contain every IdP secret** | `idp` (writes), `atlas-backup` (reads) | uid 10002, group 10001, `2750` |
 | `backups/idp-restore/` | A backup staged by `atlas-admin restore` | `idp`, read-only | uid 10001, group 10002, `2750` |
 | Docker volume `atlas_idp` | Kanidm's database | `idp` | uid 10002, `0700` |
+| Docker volume `atlas_idp-admin` | Kanidm's admin socket, nothing else. No data, no backup | `idp` | uid 10002, `0700` |
+
+**The admin socket.** Kanidm has a unix socket for administration that needs no password: whoever can connect to it can reset the password of the built-in `idm_admin` account. The stack keeps it on its own small Docker volume, `atlas_idp-admin` (`<project>_idp-admin`, where the project is `atlas` unless you changed it), and `server.toml` points Kanidm there (`adminbindpath`). The volume holds the socket and nothing else:
+
+- the directory belongs to uid 10002 with mode `0700`, so only Kanidm's own user, and root with the `DAC_OVERRIDE` capability, can connect. A container that mounts this volume, even read-only, reaches the socket as uid 10002 and no other user does. That is how the IdP setup that comes next will use it, without ever mounting Kanidm's database;
+- it is an ordinary project volume, not an external one like `atlas_idp`: Compose creates it, `atlas-idp-init` prepares it on every start, and Kanidm recreates the socket on every start. It holds no data, so it needs no backup and `install.sh` does not create it;
+- no Atlas service uses the socket yet.
 
 **Renewing the IdP's certificate.** The internal certificate is valid for three years. `atlas-idp-init` warns 60 days before it expires. To issue a new one from the same CA (nothing needs to change in atlas-proxy, which trusts the CA), run:
 
 ```bash
-docker compose run --rm atlas-idp-init atlas-admin init --secrets-dir=/secrets --backup-dir=/backups --chown --idp-data-dir=/idp-data --rotate-idp-cert
+docker compose run --rm atlas-idp-init atlas-admin init --secrets-dir=/secrets --backup-dir=/backups --chown --idp-data-dir=/idp-data --idp-admin-dir=/idp-admin --rotate-idp-cert
 ```
 
 Then restart the IdP:
