@@ -46,7 +46,9 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - REST calls to the bundled IdP, always verified against its internal CA: login for the built-in service accounts, service accounts and API tokens, groups, OAuth2 clients;
   - the admin unix socket (`RecoverAccount`, `DisableAccount`);
   - typed errors, and no credential in a log, an error message or a `repr`;
-  - no service uses it yet: the IdP bootstrap (5b-2) is its first caller.
+  - no service uses it yet: the IdP bootstrap (5b-2) is its first caller;
+  - for the bootstrap (5b-2a), checked against the real IdP: redirect URLs with an app's own scheme (`app.immich:///oauth-callback`; `http://` is still refused), OAuth2 client settings (landing URL, strict redirects, PKCE, legacy crypto) in one idempotent call, deleting an API token, and groups and service accounts by UUID. An OAuth2 client is still addressed by name only: Kanidm answers a UUID there with `200 null`, a 404 or a silent no-op.
+- **Kanidm's admin socket on its own volume** (Phase 5b-2a): `server.toml` gains `adminbindpath`, and the socket lives on a new volume, `idp-admin`, that only uid 10002 can use. The IdP bootstrap (5b-2b) can then reach the socket without mounting Kanidm's database. Nothing uses the socket yet.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -92,6 +94,17 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` must still be set by hand until Phase 5b.
+- **If you run a pre-release checkout from before the admin-socket volume** (5b-2a), the bundled IdP's admin socket moves to a new volume. Run `./install.sh` as usual (or `docker compose up -d`); in `deploy/`:
+
+  ```bash
+  ./install.sh
+  ```
+
+  - Compose creates the volume `atlas_idp-admin` (`<project>_idp-admin`). It holds only the socket, so it needs no backup and no setting; `install.sh` does not need to create it.
+  - `atlas-idp-init` rewrites `secrets/idp/server.toml` with the new `adminbindpath` line and gives the new volume to uid 10002.
+  - The `idp` service restarts once to move its socket. Expect a short IdP outage; the data volume is not touched.
+  - A stale `kanidmd.sock` file stays in the `atlas_idp` volume. It is harmless and can stay.
+  - Bring-your-own OIDC: nothing changes.
 - **If you run a pre-release checkout from Phase 5a** (before 5b-0), recreate the `idp-front` network once so that it gets its new option. This applies in bring-your-own OIDC mode too. No setting changes, and the data volumes are not touched. In `deploy/`:
 
   ```bash
