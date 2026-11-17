@@ -142,7 +142,7 @@ def test_the_bootstrap_loads_no_env_file(monkeypatch: pytest.MonkeyPatch, tmp_pa
 ADMIN_VALUE = "console-" * 5
 
 
-def test_the_admin_token_is_optional_and_never_shown(make_settings) -> None:  # type: ignore[no-untyped-def]
+def test_the_admin_token_is_optional_with_byo_and_never_shown(make_settings) -> None:  # type: ignore[no-untyped-def]
     assert make_settings().idp_admin_token is None
     settings = make_settings(ATLAS_IDP_ADMIN_TOKEN=ADMIN_VALUE)
     assert settings.idp_admin_token is not None
@@ -204,6 +204,7 @@ def bundled_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, idp: bool = 
     app_env.write_text(
         f"SECRET_KEY={VALID['SECRET_KEY']}\nDATABASE_URL={VALID['DATABASE_URL']}\n"
         "ATLAS_OIDC_CLIENT_SECRET=set-by-hand-1\n"
+        f"ATLAS_IDP_ADMIN_TOKEN={ADMIN_VALUE}\n"  # required with the bundled IdP (5b-3b)
     )
     monkeypatch.setenv("ATLAS_ENV", "development")
     monkeypatch.setenv("ATLAS_PUBLIC_URL", "https://atlas.home.arpa")
@@ -276,7 +277,12 @@ def test_directly_built_settings_are_not_checked() -> None:
     from atlas.kernel.config import build_settings
 
     settings = build_settings(
-        _env_file=None, **{**VALID, "ATLAS_IDP_PUBLIC_URL": "https://id.home.arpa"}
+        _env_file=None,
+        **{
+            **VALID,
+            "ATLAS_IDP_PUBLIC_URL": "https://id.home.arpa",
+            "ATLAS_IDP_ADMIN_TOKEN": ADMIN_VALUE,
+        },
     )
     assert settings.bundled_idp is True  # no record file anywhere, and that is fine here
 
