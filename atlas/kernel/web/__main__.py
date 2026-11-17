@@ -31,10 +31,18 @@ def main(argv: list[str] | None = None) -> int:
     from atlas.kernel.web.logging import configure_logging
 
     configure_logging(settings)
+    # ONE process, on purpose: the app object is passed (not an import string) and
+    # `workers` is 1, so uvicorn cannot start more. The IdentityAdmin adapter (Phase 5b-3b)
+    # serialises role changes per person with an in-process lock, and a race between two
+    # processes leaves a person in two role groups (probe P5: 20 of 20 rounds). Before
+    # ever running more than one process, role changes need a cross-process lock first: a
+    # Postgres advisory lock around the change (pg_advisory_xact_lock on the person).
+    # tests/kernel/test_single_process.py fails if this is changed without that.
     uvicorn.run(
         create_app(settings),
         host=args.host,
         port=args.port,
+        workers=1,
         log_config=None,
         log_level=settings.log_level,
         proxy_headers=False,
