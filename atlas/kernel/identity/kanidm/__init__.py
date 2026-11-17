@@ -11,6 +11,7 @@ from atlas.kernel.identity.kanidm.client import (
     Entry,
     EntryKind,
     KanidmClient,
+    ResetIntent,
     api_token_id,
 )
 from atlas.kernel.identity.kanidm.errors import (
@@ -45,5 +46,6 @@ __all__ = [
     "KanidmProtocolError",
     "KanidmServerError",
     "KanidmUnavailable",
+    "ResetIntent",
     "api_token_id",
 ]

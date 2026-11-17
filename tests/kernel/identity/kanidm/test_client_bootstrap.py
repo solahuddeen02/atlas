@@ -310,15 +310,20 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         "add_group_attr",
         "add_group_members",
         "add_oauth2_redirect_url",
+        "clear_person_account_expire",
         "create_group",
         "create_oauth2_basic_client",
+        "create_person",
         "create_service_account",
         "delete_api_token",
+        "delete_person",
         "get_group",
         "get_oauth2_basic_secret",
         "get_oauth2_client",
+        "get_person",
         "get_service_account",
         "issue_api_token",
+        "issue_credential_reset_intent",
         "list_api_tokens",
         "login",
         "remove_group_members",
@@ -327,6 +332,7 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         "remove_unwanted_oauth2_redirect_url",
         "set_group_attr",
         "set_oauth2_scope_map",
+        "set_person_account_expire",
         "update_oauth2_client",
     }
     handler = Recorder()
@@ -335,6 +341,10 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         await client.remove_oauth2_redirect_url("atlas", "https://atlas.example.com/old")
         await client.delete_api_token("atlas-console", LISTED_ID)
         await client.remove_group_members("atlas_role_guest", ["atlas-console"])
+        # Person calls (5b-3b). The one that deletes a whole attribute is fixed to
+        # account_expire: it takes no attribute name.
+        await client.delete_person("somchai")
+        await client.clear_person_account_expire("somchai")
 
     call_with(handler, ca_file, calls)
     deletes = [(r.url.path, body_of(r)) for r in handler.requests if r.method == "DELETE"]
@@ -342,6 +352,8 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         ("/v1/oauth2/atlas/_attr/oauth2_rs_origin", ["https://atlas.example.com/old"]),
         (f"/v1/service_account/atlas-console/_api_token/{LISTED_ID}", None),
         ("/v1/group/atlas_role_guest/_attr/member", ["atlas-console"]),
+        ("/v1/person/somchai", None),
+        ("/v1/person/somchai/_attr/account_expire", None),
     ]
 
 

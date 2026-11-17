@@ -89,12 +89,26 @@ from atlas.kernel.identity.kanidm.errors import (
 
 logger = logging.getLogger("atlas.identity.kanidm")
 
-EntryKind = Literal["service_account", "group", "oauth2_client"]
+EntryKind = Literal["service_account", "group", "oauth2_client", "person"]
 
 # The only attributes an Entry keeps, per object type. Anything else Kanidm returns,
 # including attributes this code has never seen, is dropped at parse time. Never add a
 # credential here (e.g. oauth2_rs_basic_secret, key_internal_data, primary_credential).
 ENTRY_ATTRIBUTES: Mapping[EntryKind, frozenset[str]] = {
+    # A person: who they are and which groups they are in. No credential attribute is
+    # listed or ever may be (primary_credential, passkeys, the reset-intent state): the
+    # allowlist is what keeps a person's credentials out of every log, error and repr.
+    "person": frozenset(
+        {
+            "account_expire",
+            "class",
+            "directmemberof",
+            "displayname",
+            "name",
+            "spn",
+            "uuid",
+        }
+    ),
     "service_account": frozenset(
         {
             "class",
@@ -231,6 +245,23 @@ class ApiTokenInfo:
     expiry: datetime | None
 
 
+@dataclass(frozen=True, repr=False)
+class ResetIntent:
+    """A credential-reset token Kanidm issued, and when it stops working.
+
+    The token is a bearer secret: with it anyone can set the person's credential. It is a
+    `SecretStr`, and nothing here prints it.
+    """
+
+    token: SecretStr
+    expiry: datetime
+
+    def __repr__(self) -> str:
+        return f"ResetIntent(expiry={self.expiry.isoformat()}, token=<redacted>)"
+
+    __str__ = __repr__
+
+
 def parse_entry(kind: EntryKind, data: object) -> Entry | None:
     """An Entry from Kanidm's `{"attrs": {name: [values]}}`, or None if it is not one."""
     if not isinstance(data, dict):
@@ -265,6 +296,27 @@ def _id(value: str, what: str = "id") -> str:
     raise ValueError(
         f"invalid Kanidm {what}: a name (lowercase letters, digits, '_' and '-') or a UUID"
     )
+
+
+# A person's name: Kanidm lowercases it and also accepts `.` (checked on 1.12.0: up to 64
+# characters, a letter first). A group or a service account never has a dot here.
+_PERSON_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
+
+
+def _person_name(value: str) -> str:
+    """The name of a new person, as Kanidm stores it (lowercase)."""
+    if not isinstance(value, str) or not _PERSON_NAME.fullmatch(value) or _UUID.fullmatch(value):
+        raise ValueError(
+            "invalid Kanidm person name: lowercase letters, digits, '.', '_' and '-' only"
+        )
+    return value
+
+
+def _person_id(value: str) -> str:
+    """An existing person's name or UUID."""
+    if isinstance(value, str) and (_PERSON_NAME.fullmatch(value) or _UUID.fullmatch(value)):
+        return value
+    raise ValueError("invalid Kanidm person id: a name or a UUID")
 
 
 def _values(values: Sequence[str], what: str) -> list[str]:
@@ -523,7 +575,12 @@ class KanidmClient:
         # nothing from that response may reach an error either.
         sensitive = kind == "oauth2_client"
         # Kanidm resolves an OAuth2 client by name only (see the module docstring).
-        ident = _name(name) if kind == "oauth2_client" else _id(name)
+        if kind == "oauth2_client":
+            ident = _name(name)
+        elif kind == "person":
+            ident = _person_id(name)
+        else:
+            ident = _id(name)
         data, _ = await self._call("GET", template, path={"id": ident}, sensitive=sensitive)
         if data is None:
             return None
@@ -692,6 +749,89 @@ class KanidmClient:
         except KanidmNotFound:
             missing = True
         return not missing
+
+    # --- persons -----------------------------------------------------------------
+
+    async def get_person(self, ident: str) -> Entry | None:
+        """A person by name or UUID, or None.
+
+        None also for the UUID of anything that is not a person (a service account, a
+        group): Kanidm answers `200 null`, and an entry without the class `person` is
+        refused as well.
+        """
+        entry = await self._get_entry("person", "/v1/person/{id}", ident)
+        if entry is not None and "person" not in entry.attrs.get("class", ()):
+            return None
+        return entry
+
+    async def create_person(self, name: str, *, display_name: str) -> None:
+        """Create a person (409 if the name exists, also for a group or account name)."""
+        if not isinstance(display_name, str) or not display_name:
+            raise ValueError("display_name must not be empty")
+        attrs = {"name": [_person_name(name)], "displayname": [display_name]}
+        await self._write("POST", "/v1/person", path={}, body={"attrs": attrs})
+
+    async def delete_person(self, ident: str) -> bool:
+        """Delete a person. True if deleted, False if there is no such person (404).
+
+        Group memberships go with the person. A person's reset tokens stop working.
+        """
+        try:
+            await self._call("DELETE", "/v1/person/{id}", path={"id": _person_id(ident)})
+        except KanidmNotFound:
+            return False
+        return True
+
+    async def set_person_account_expire(self, ident: str, when: datetime) -> None:
+        """Set `account_expire`. In the past it disables the person: sessions are refused
+        and a login is denied. Idempotent."""
+        if when.tzinfo is None:
+            raise ValueError("when must be timezone-aware")
+        stamp = when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await self._write(
+            "PUT",
+            "/v1/person/{id}/_attr/account_expire",
+            path={"id": _person_id(ident)},
+            body=[stamp],
+        )
+
+    async def clear_person_account_expire(self, ident: str) -> None:
+        """Remove `account_expire`. Idempotent (checked on 1.12.0: 200 when it is not set).
+
+        The one call here that deletes a whole attribute, and only this one, fixed.
+        """
+        await self._write(
+            "DELETE",
+            "/v1/person/{id}/_attr/account_expire",
+            path={"id": _person_id(ident)},
+            body=None,
+        )
+
+    async def issue_credential_reset_intent(self, ident: str, *, ttl_seconds: int) -> ResetIntent:
+        """Issue a credential-reset token for a person.
+
+        Kanidm 1.12.0 clamps `ttl_seconds` to 300..86400 without saying so; the caller
+        decides what it allows. Issuing another token does not cancel an older one, and
+        no call revokes one. The response is a secret, so errors carry nothing from it.
+        """
+        if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int):
+            raise ValueError("ttl_seconds must be a whole number of seconds")
+        if not 1 <= ttl_seconds <= 86400:
+            raise ValueError("ttl_seconds must be between 1 and 86400")
+        template = "/v1/person/{id}/_credential/_update_intent/{ttl}"
+        data, _ = await self._call(
+            "GET",
+            template,
+            path={"id": _person_id(ident), "ttl": str(ttl_seconds)},
+            sensitive=True,
+        )
+        token = data.get("token") if isinstance(data, dict) else None
+        expiry = _parse_time(data.get("expiry_time")) if isinstance(data, dict) else None
+        if not isinstance(token, str) or not token or expiry is None:
+            raise KanidmProtocolError(
+                "the response is not a reset token", operation=f"GET {template}", status=200
+            )
+        return ResetIntent(token=SecretStr(token), expiry=expiry)
 
     # --- groups ------------------------------------------------------------------
 
