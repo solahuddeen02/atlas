@@ -164,8 +164,14 @@ def test_the_first_run_sets_everything_up(rig: Rig) -> None:
 
     account = idp.accounts["atlas-console"]
     assert account["managed_by"] == idp.groups["idm_admins"]["uuid"]
-    for group in ("idm_people_admins", "idm_group_admins"):
-        assert f"atlas-console@{DOMAIN}" in idp.groups[group]["member"]
+    # Least privilege (version 2): people_admins only, and every one of its six groups
+    # managed by the console. It never joins idm_group_admins on a fresh install.
+    assert f"atlas-console@{DOMAIN}" in idp.groups["idm_people_admins"]["member"]
+    assert f"atlas-console@{DOMAIN}" not in idp.groups["idm_group_admins"]["member"]
+    for group in (*ROLE_GROUPS, "immich_users"):
+        assert idp.groups[group]["managed_by"] == account["uuid"], group
+    for group in ("atlas_users", "idm_all_persons"):
+        assert "managed_by" not in idp.groups[group], group
 
 
 def test_the_first_run_leaves_one_token_and_the_clients(rig: Rig) -> None:
@@ -236,7 +242,11 @@ def test_the_run_is_ordered_and_idm_admin_is_disabled_last(rig: Rig) -> None:
         assert first(f"idp.set_group_attr:{role}") < lowered
     # The service account is created before it joins the admin groups.
     assert first("idp.create_service_account") < first("idp.add_group_members:idm_people_admins")
-    assert first("idp.create_service_account") < first("idp.add_group_members:idm_group_admins")
+    # The console never joins idm_group_admins; its six groups are managed instead, and
+    # that is set after the account exists.
+    assert trace.count_prefix("idp.add_group_members:idm_group_admins") == 0
+    for group in (*ROLE_GROUPS, "immich_users"):
+        assert first("idp.create_service_account") < first(f"idp.set_managed_by:{group}")
 
 
 def test_every_line_names_what_it_did_and_nothing_secret(rig: Rig) -> None:
@@ -602,7 +612,9 @@ STEP_FAILURES = [
     ("immich-group", "create_group:immich_users", "groups"),
     ("all-persons", "set_group_attr:idm_all_persons", "all-persons"),
     ("console", "create_service_account", "console"),
-    ("console-group", "add_group_members:idm_group_admins", "console"),
+    ("console-group", "add_group_members:idm_people_admins", "console"),
+    ("console-manager-first", "set_group_attr:atlas_role_owner:entry_managed_by", "console"),
+    ("console-manager-last", "set_group_attr:immich_users:entry_managed_by", "console"),
     ("token", "issue_api_token", "token"),
     ("client-atlas", "create_oauth2_basic_client:atlas", "client-atlas"),
     ("client-atlas-scope", "set_oauth2_scope_map:atlas", "client-atlas"),
@@ -920,7 +932,7 @@ def test_failing_to_write_the_final_record_fails_the_run(
 def test_a_fast_path_that_cannot_check_kanidm_falls_back_to_a_full_run(records: Rig) -> None:
     records.run()
     records.trace.clear()
-    records.idp.fail_on["get_group:atlas_users"] = KanidmServerError(
+    records.idp.fail_on["get_group:atlas_role_child"] = KanidmServerError(
         "Kanidm reported an error", operation="GET /x", status=500
     )
     result = records.run()

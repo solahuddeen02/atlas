@@ -21,7 +21,9 @@ from pathlib import Path
 
 # Bump when the desired state changes (a new group, a new client setting, ...): an
 # install that ran an older bootstrap is then not complete until this one has run.
-BOOTSTRAP_VERSION = 1
+# 2: the console manages the five role groups and immich_users through entry_managed_by
+#    and no longer belongs to idm_group_admins (Phase 5b-3a).
+BOOTSTRAP_VERSION = 2
 RECORD_FILE = "bootstrap.json"
 LOGS_HINT = (
     "read `docker compose logs atlas-idp-bootstrap`, fix what it reports, then run "

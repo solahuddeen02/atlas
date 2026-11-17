@@ -16,8 +16,8 @@ Full run, in order:
  5. the groups: `atlas_users`, the five role groups with their credential policies,
     every role group a member of `atlas_users`, and `immich_users` with Immich;
  6. `idm_all_persons` to credential type `any`, only after step 5 has been read back;
- 7. the service account `atlas-console` (managed by `idm_admins`), then its two
-    memberships;
+ 7. the service account `atlas-console` (managed by `idm_admins`) and its membership of
+    `idm_people_admins`; then the least-privilege change (below);
  8. its API token: exactly one with our label, written to idp.env before older ones
     are deleted;
  9. the OAuth2 client `atlas`: landing URL = the OIDC callback and its only redirect
@@ -29,6 +29,16 @@ Full run, in order:
     stored one;
 12. DisableAccount for `idm_admin`;
 13. `complete: true` into bootstrap.json: the last act, after everything else worked.
+
+Least privilege (step 7, version 2): the console must change members of the five role
+groups and `immich_users` and of no other group. `idm_group_admins` would let it edit
+every group that is not high-privilege (it could even delete `atlas_users`), so the
+console is not a member of it. Instead each of the six groups is managed by the console
+(`entry_managed_by`). The order matters and is checked: set the manager on all six, read
+every one back, and only then remove the console from `idm_group_admins`. A failure in
+between fails the run (the record stays incomplete) and the next run resumes: every write
+is made only on a difference. `--verify` also removes members of the six groups that are
+not persons (log: group, name and UUID).
 
 The fast path skips 4 to 11 when everything below holds, and still sends
 DisableAccount (no recover, no login, and a failure of that call fails the run), then
@@ -85,7 +95,9 @@ IMMICH_GROUP = "immich_users"
 CONSOLE_ACCOUNT = "atlas-console"
 CONSOLE_TOKEN_LABEL = "atlas-console"
 CONSOLE_MANAGER_GROUP = "idm_admins"
-CONSOLE_GROUPS = ("idm_people_admins", "idm_group_admins")
+CONSOLE_GROUPS = ("idm_people_admins",)
+# Held by a console from before version 2; removed once the six groups are managed.
+FORMER_CONSOLE_GROUPS = ("idm_group_admins",)
 ALL_PERSONS_GROUP = "idm_all_persons"
 
 ATLAS_CLIENT = "atlas"
@@ -112,6 +124,8 @@ IMMICH_ENV_CLIENT_SECRET = "OAUTH_CLIENT_SECRET"
 SHARED_MODE = 0o640
 PRIVATE_MODE = 0o600
 
+# A name Kanidm gives to a group or a service account this module can look up.
+_KANIDM_NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # What may be written into an env file unquoted: no space, quote, `#`, `$` or newline.
 _ENV_VALUE = re.compile(r"[A-Za-z0-9._~+/=-]+")
@@ -153,6 +167,7 @@ class IdpClient(Protocol):
     async def add_group_attr(self, group: str, attr: str, values: Sequence[str]) -> None: ...
     async def set_group_attr(self, group: str, attr: str, values: Sequence[str]) -> None: ...
     async def add_group_members(self, group: str, members: Sequence[str]) -> None: ...
+    async def remove_group_members(self, group: str, members: Sequence[str]) -> None: ...
     async def get_service_account(self, name: str) -> Entry | None: ...
     async def create_service_account(
         self, name: str, *, display_name: str, managed_by: str
@@ -342,7 +357,11 @@ class Bootstrap:
             return f"{IMMICH_ENV} is missing"
         try:
             async with self._connect(SecretStr(token)) as client:
+                # Only the groups the console manages: it cannot see `atlas_users`, and
+                # that it sees the others at all shows it is still their manager.
                 for name, uuid in sorted(groups.items()):
+                    if name == USERS_GROUP:
+                        continue
                     entry = await client.get_group(name)
                     if entry is None or entry.uuid != uuid:
                         return f"group {name} does not match {GROUPS_FILE}"
@@ -390,6 +409,9 @@ class Bootstrap:
             await self._step_all_persons(admin)
         with _in_step("console"):
             await self._step_console(admin)
+        if config.verify:
+            with _in_step("strays"):
+                await self._step_strays(admin)
         with _in_step("token"):
             token, rotated = await self._step_token(admin)
         with _in_step("client-atlas"):
@@ -427,6 +449,10 @@ class Bootstrap:
         if self._config.immich_url is not None:
             names.append(IMMICH_GROUP)
         return names
+
+    def _managed_group_names(self) -> list[str]:
+        """The groups the console changes members of: the role groups and immich_users."""
+        return [name for name in self._group_names() if name != USERS_GROUP]
 
     async def _ensure_group(self, admin: IdpClient, name: str) -> Entry:
         entry = await admin.get_group(name)
@@ -541,13 +567,90 @@ class Bootstrap:
             if not joined:
                 await admin.add_group_members(group, [CONSOLE_ACCOUNT])
             self._emit(f"group {group} member {CONSOLE_ACCOUNT} {'kept' if joined else 'updated'}")
+        await self._step_managers(admin, entry.uuid)
+        await self._leave_former_groups(admin)
+
+    async def _step_managers(self, admin: IdpClient, console_uuid: str) -> None:
+        """The console manages each of its groups, and every one is read back.
+
+        Writes only on a difference (idempotent, so a run after a failure resumes). The
+        read-back is a second pass over all of them, because the console leaves
+        idm_group_admins right after: Kanidm answers 200 to a write it ignored.
+        """
+        names = self._managed_group_names()
+        for name in names:
+            entry = await admin.get_group(name)
+            if entry is None:
+                raise BootstrapError("console", f"group {name} does not exist")
+            if entry.first("entry_managed_by") != console_uuid:
+                await admin.set_group_attr(name, "entry_managed_by", [console_uuid])
+        for name in names:
+            entry = await admin.get_group(name)
+            if entry is None or entry.first("entry_managed_by") != console_uuid:
+                raise BootstrapError(
+                    "console", f"group {name} is not managed by {CONSOLE_ACCOUNT} after the write"
+                )
+        self._emit(f"groups managed by {CONSOLE_ACCOUNT}: {', '.join(names)}")
+
+    async def _leave_former_groups(self, admin: IdpClient) -> None:
+        domain = self._config.idp_domain
+        for group in FORMER_CONSOLE_GROUPS:
+            members = await admin.get_group(group)
+            if members is None:
+                raise BootstrapError("console", f"group {group} does not exist")
+            if f"{CONSOLE_ACCOUNT}@{domain}" in members.attrs.get("member", ()):
+                await admin.remove_group_members(group, [CONSOLE_ACCOUNT])
+                again = await admin.get_group(group)
+                if again is None or f"{CONSOLE_ACCOUNT}@{domain}" in again.attrs.get("member", ()):
+                    raise BootstrapError(
+                        "console", f"{CONSOLE_ACCOUNT} is still a member of {group} after removal"
+                    )
+                self._emit(f"group {group} member {CONSOLE_ACCOUNT} removed")
+            else:
+                self._emit(f"group {group} member {CONSOLE_ACCOUNT} absent")
+
+    async def _non_person(self, admin: IdpClient, name: str) -> tuple[str, str] | None:
+        """(kind, UUID) of a group or a service account called `name`, else None.
+
+        A member that is neither is taken for a person: the client has no person calls
+        (Phase 5b-3b adds them), and a name that Kanidm would not give a group or a
+        service account is always a person.
+        """
+        if not _KANIDM_NAME.fullmatch(name):
+            return None
+        group = await admin.get_group(name)
+        if group is not None and group.uuid:
+            return "group", group.uuid
+        account = await admin.get_service_account(name)
+        if account is not None and account.uuid:
+            return "service account", account.uuid
+        return None
+
+    async def _step_strays(self, admin: IdpClient) -> None:
+        """--verify: remove members of the six groups that are not persons."""
+        removed = 0
+        for group in self._managed_group_names():
+            entry = await admin.get_group(group)
+            if entry is None:
+                raise BootstrapError("strays", f"group {group} does not exist")
+            for spn in sorted(entry.attrs.get("member", ())):
+                member = spn.partition("@")[0]
+                found = await self._non_person(admin, member)
+                if found is None:
+                    continue
+                await admin.remove_group_members(group, [member])
+                self._emit(f"group {group} member {member} {found[1]} removed (not a person)")
+                removed += 1
+        if not removed:
+            self._emit("groups hold persons only")
 
     # --- step 8: the console's token -----------------------------------------------
 
     async def _token_works(self, token: SecretStr) -> bool:
         try:
             async with self._connect(token) as client:
-                return await client.get_group(USERS_GROUP) is not None
+                # A group the console manages: it cannot see atlas_users any more.
+                return await client.get_group(ROLE_POLICIES[0].group) is not None
         except (KanidmAuthError, KanidmPermissionDenied):
             return False
 

@@ -43,7 +43,7 @@ def test_an_incomplete_record_is_refused(tmp_path: Path) -> None:
         ("null", "unreadable"),
         (b"\xff\xfe", "unreadable"),
         ({"complete": True}, "version ?"),  # no version
-        ({"version": BOOTSTRAP_VERSION - 1, "complete": True}, "version 0"),
+        ({"version": BOOTSTRAP_VERSION - 1, "complete": True}, f"version {BOOTSTRAP_VERSION - 1}"),
         ({"version": BOOTSTRAP_VERSION + 1, "complete": True}, f"version {BOOTSTRAP_VERSION + 1}"),
         ({"version": True, "complete": True}, "version ?"),
         ({"version": "1", "complete": True}, "version ?"),
