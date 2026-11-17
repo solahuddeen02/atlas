@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from atlas.kernel.cli import db
+from atlas.kernel.cli import db, idp_bootstrap
 from atlas.kernel.cli.idp import IdpOptions
 from atlas.kernel.cli.init import InitError, Ownership, run_init
 from atlas.kernel.config import ConfigError, load_init_settings
@@ -104,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(handler=_cmd_init)
 
     db.add_commands(commands)
+    idp_bootstrap.add_commands(commands)
     return parser
 
 

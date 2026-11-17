@@ -11,14 +11,14 @@
 # by atlas-init under ${ATLAS_SECRETS_DIR} (ADR-004). Nothing secret is in this file.
 #
 # Bundled IdP (ADR-001), profile `bundled-idp` (on in .env.example): atlas-idp-init →
-# idp (Kanidm), served by atlas-proxy at ATLAS_IDP_PUBLIC_URL. Without the profile,
-# this is the bring-your-own-OIDC setup.
+# idp (Kanidm) → atlas-idp-bootstrap → atlas-api. Kanidm is served by atlas-proxy at
+# ATLAS_IDP_PUBLIC_URL. Without the profile, this is the bring-your-own-OIDC setup.
 #   - idp-front (internal): atlas-proxy + idp only. Kanidm trusts X-Forwarded-For from
 #     this subnet (ATLAS_IDP_FRONT_SUBNET) and from nowhere else. The host has no
 #     address on it (inhibit_ipv4), so nothing on the host can connect from that subnet.
 #   - idp-back (internal): atlas-api + idp, for the back-channel (Phase 5b). Not trusted.
-#   - idp-admin (volume): Kanidm's admin unix socket and nothing else, so that the IdP
-#     bootstrap (Phase 5b) can reach the socket without mounting Kanidm's database.
+#   - idp-admin (volume): Kanidm's admin unix socket and nothing else, so that
+#     atlas-idp-bootstrap can reach the socket without mounting Kanidm's database.
 #     Only uid 10002 can use it (0700 directory). An ordinary project volume: Compose
 #     creates it and atlas-idp-init prepares it on every start.
 #   - Kanidm's whole configuration is the server.toml that atlas-idp-init writes. Never
@@ -121,12 +121,17 @@ services:
       ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
       # Bundled IdP: the OIDC issuer defaults from it (ADR-001).
       ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+      # The defaults, plus (bundled IdP only) the file the IdP bootstrap writes. It is
+      # last, so its OIDC client secret wins over a value set by hand in app.env.
+      ATLAS_ENV_FILES: /run/secrets/atlas/app.env,/run/secrets/atlas/connectors.env${ATLAS_IDP_PUBLIC_URL:+,/run/secrets/atlas-idp/idp.env}
     networks:
       - default
       - idp-back
     volumes:
       # Only the Atlas secrets. The API never sees the Postgres superuser password.
       - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
+      # What the IdP bootstrap wrote for the API (empty with BYO OIDC).
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas-idp:/run/secrets/atlas-idp:ro
     healthcheck:
       test:
         - CMD
@@ -139,6 +144,11 @@ services:
     depends_on:
       atlas-migrate:
         condition: service_completed_successfully
+      # Only with the bundled-idp profile: the API starts after the IdP is set up, and
+      # not at all when that fails. BYO has no such service.
+      atlas-idp-bootstrap:
+        condition: service_completed_successfully
+        required: false
 
   # --- Bundled IdP (profile bundled-idp) -------------------------------------------
 
@@ -223,6 +233,43 @@ services:
     depends_on:
       atlas-idp-init:
         condition: service_completed_successfully
+
+  # One-shot, on every start, after idp is healthy: creates Atlas's OAuth2 client (and
+  # Immich's), the console's service account and the role groups, and writes what
+  # atlas-api needs into secrets/atlas-idp (ADR-001, SELF_HOSTING). No capabilities, no
+  # network but idp-back, and of Kanidm's volumes only the admin socket, read-only.
+  # It never mounts the Docker socket or Kanidm's database. If it fails, atlas-api does
+  # not start: `docker compose logs atlas-idp-bootstrap` says why.
+  atlas-idp-bootstrap:
+    <<: *atlas
+    profiles: ["bundled-idp"]
+    # The idp user: the only user that can use the admin socket (0700 volume) and the
+    # owner of secrets/atlas-idp and secrets/idp-clients (atlas-idp-init sets them up).
+    user: "10002:10002"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["atlas-admin", "idp-bootstrap"]
+    environment:
+      <<: *tz
+      ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:?set ATLAS_PUBLIC_URL in deploy/.env}
+      ATLAS_IDP_PUBLIC_URL: ${ATLAS_IDP_PUBLIC_URL:-}
+      # Set to connect Immich: the bootstrap then creates Immich's OAuth2 client.
+      ATLAS_IMMICH_PUBLIC_URL: ${ATLAS_IMMICH_PUBLIC_URL:-}
+    networks:
+      - idp-back
+    volumes:
+      # Kanidm's admin socket, read-only (a socket can still be connected to).
+      - idp-admin:/run/atlas-idp-admin:ro
+      - ${ATLAS_SECRETS_DIR:-./secrets}/idp-trust:/run/secrets/idp-trust:ro
+      # idp.env, groups.json and its own record (read by atlas-api), and Immich's secret.
+      - ${ATLAS_SECRETS_DIR:-./secrets}/atlas-idp:/run/secrets/atlas-idp
+      - ${ATLAS_SECRETS_DIR:-./secrets}/idp-clients:/run/secrets/idp-clients
+    depends_on:
+      idp:
+        condition: service_healthy
 
   atlas-proxy:
     # nginxinc/nginx-unprivileged:1.30.6-alpine, pinned by digest. Runs as uid 101.
@@ -327,6 +374,6 @@ networks:
     ipam:
       config:
         - subnet: ${ATLAS_IDP_FRONT_SUBNET:-10.249.73.0/28}
-  # atlas-api + idp (the OIDC back-channel, Phase 5b). Kanidm trusts nothing here.
+  # atlas-api, atlas-idp-bootstrap + idp (the OIDC back-channel). Kanidm trusts nothing here.
   idp-back:
     internal: true

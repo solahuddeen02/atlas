@@ -322,6 +322,8 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         "list_api_tokens",
         "login",
         "remove_oauth2_redirect_url",
+        "remove_oauth2_scope_map",
+        "remove_unwanted_oauth2_redirect_url",
         "set_group_attr",
         "set_oauth2_scope_map",
         "update_oauth2_client",

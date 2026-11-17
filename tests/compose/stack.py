@@ -41,6 +41,7 @@ DIAGNOSTIC_SERVICES = (
     "postgres",
     "atlas-idp-init",
     "idp",
+    "atlas-idp-bootstrap",
 )
 
 # Stacks alive right now, for the per-test watchdog (tests/compose/conftest.py).
@@ -134,16 +135,18 @@ class Stack:
             )
             + "\n"
         )
-        # The API needs OIDC settings that init doesn't generate yet (TODO(phase-5b):
-        # the IdP bootstrap writes the client secret). Put them in app.env first; init
-        # only appends missing keys.
         self.secrets_dir.mkdir(mode=0o700)
         atlas_dir = self.secrets_dir / "atlas"
         atlas_dir.mkdir(mode=0o700)
-        (atlas_dir / "app.env").write_text(
-            "ATLAS_OIDC_ISSUER=https://id.test.invalid\n"
-            f"ATLAS_OIDC_CLIENT_SECRET={secrets.token_urlsafe(24)}\n"
-        )
+        if not self.idp:
+            # BYO OIDC: the API needs an issuer and a client secret that init doesn't
+            # generate. Put them in app.env first; init only appends missing keys. With
+            # the bundled IdP nothing is written here: the issuer comes from
+            # ATLAS_IDP_PUBLIC_URL and the client secret from the IdP bootstrap.
+            (atlas_dir / "app.env").write_text(
+                "ATLAS_OIDC_ISSUER=https://id.test.invalid\n"
+                f"ATLAS_OIDC_CLIENT_SECRET={secrets.token_urlsafe(24)}\n"
+            )
         if self.create_volume:
             run(["docker", "volume", "create", self.volume])
             if self.idp:
@@ -241,7 +244,8 @@ class Stack:
 
     def logs(self, *services: str) -> str:
         result = self.compose("logs", "--no-color", *services, check=False)
-        return (result.stdout + result.stderr)[-8000:]
+        # Kanidm logs every request of the IdP bootstrap, so its start-up lines are far back.
+        return (result.stdout + result.stderr)[-200000:]
 
     def request(
         self,

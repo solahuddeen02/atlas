@@ -41,7 +41,7 @@ def test_creates_everything_with_strict_modes(secrets_dir: Path) -> None:
     for f in FILES:
         assert mode(secrets_dir / f) == 0o600, f
     assert sorted(str(p.relative_to(secrets_dir)) for p in secrets_dir.rglob("*")) == sorted(
-        ["atlas", "idp-trust", "postgres", *FILES]
+        ["atlas", "atlas-idp", "idp-trust", "postgres", *FILES]
     )
 
 
@@ -140,8 +140,8 @@ def test_operator_files_untouched_when_idp_trust_is_added(secrets_dir: Path) -> 
 
     run_init(secrets_dir)
     after = snapshot(secrets_dir)
-    assert set(after) - set(before) == {"idp-trust"}
-    assert {k: v for k, v in after.items() if k != "idp-trust"} == before
+    assert set(after) - set(before) == {"idp-trust", "atlas-idp"}
+    assert {k: v for k, v in after.items() if k not in ("idp-trust", "atlas-idp")} == before
 
 
 def test_generated_values_pass_settings_validation(secrets_dir: Path) -> None:
@@ -172,6 +172,7 @@ def test_operator_files_untouched(secrets_dir: Path) -> None:
     (secrets_dir / "atlas").mkdir(parents=True)
     (secrets_dir / "postgres").mkdir()
     (secrets_dir / "idp-trust").mkdir()  # an existing deployment has it (5b-0)
+    (secrets_dir / "atlas-idp").mkdir()  # and this one (5b-2b)
     app_env = secrets_dir / "atlas/app.env"
     app_env.write_text(
         "# mine\nSECRET_KEY=operator-key\nDATABASE_URL=operator-db\n"

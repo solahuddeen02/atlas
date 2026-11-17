@@ -9,8 +9,11 @@ Only with the bundled IdP (ATLAS_IDP_PUBLIC_URL set). Under the secrets dir:
 | `idp/server.key` | The idp service's TLS key | idp, read-only | root:idp, 0440 (dir 0750) |
 | `idp/chain.pem` | Its certificate + the CA certificate | idp, read-only | root:idp, 0440 |
 | `idp/server.toml` | Kanidm's whole configuration (no secrets) | idp, read-only | root:idp, 0440 |
-| `idp-trust/ca.pem` | The CA certificate (public) | atlas-proxy, later api | root, 0644 (0755) |
+| `idp-trust/ca.pem` | The CA certificate (public) | atlas-proxy, bootstrap | root, 0644 (0755) |
+| `atlas-idp/` | The bootstrap's files (dir only) | bootstrap, atlas-api (ro) | idp:atlas, 2750 |
+| `idp-clients/` | The bootstrap's `immich.env` (dir only) | bootstrap | idp:idp, 0700 |
 
+"bootstrap" is the service atlas-idp-bootstrap (`atlas.kernel.identity.bootstrap`).
 Two Docker volumes, mounted into atlas-idp-init only so that it can give their top
 directory to the idp user (idp:idp, 0700); init never looks inside them:
 
@@ -51,6 +54,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from atlas.kernel.cli.init import (
+    ATLAS_IDP_DIR,
     DIR_MODE,
     FILE_MODE,
     IDP_TRUST_DIR,
@@ -72,6 +76,8 @@ SERVER_CHAIN = f"{IDP_DIR}/chain.pem"
 SERVER_CONFIG = f"{IDP_DIR}/server.toml"
 TRUST_DIR = IDP_TRUST_DIR  # created by init in both modes
 TRUST_CERT = f"{TRUST_DIR}/ca.pem"
+# What the IdP bootstrap (uid 10002) writes. `atlas-idp/` is created by init in both modes.
+CLIENTS_DIR = "idp-clients"
 
 # Backups dir layout.
 ONLINE_BACKUP_DIR = "idp-online"
@@ -414,6 +420,14 @@ def _apply_ownership(
         _set_owner(root / name, owners.admin_uid, owners.idp_gid, 0o440)
     _set_owner(root / TRUST_DIR, *admin, 0o755)
     _set_owner(root / TRUST_CERT, *admin, 0o644)
+    # The IdP bootstrap runs as the idp user (10002) and writes into these two. Only
+    # the directories are set here, never what is in them.
+    # atlas-idp/: setgid, so that its files get the Atlas group (10001): atlas-api reads
+    # idp.env and groups.json through that group and no other user can.
+    _set_owner(root / ATLAS_IDP_DIR, owners.idp_uid, owners.app_gid, 0o2750)
+    # idp-clients/: the secrets of other applications' OAuth2 clients, for the operator
+    # (sudo). Nothing but the idp user reaches them.
+    _set_owner(root / CLIENTS_DIR, owners.idp_uid, owners.idp_gid, 0o700)
     if backup_dir is not None:
         # setgid: new files take the directory's group, so atlas-backup (atlas group)
         # can read Kanidm's backups, and idp (idp group) the staged restore file.
@@ -443,6 +457,8 @@ def ensure_idp(
     _ensure_dir(root / CA_DIR, root, report)
     _ensure_dir(root / IDP_DIR, root, report)
     _ensure_dir(root / TRUST_DIR, root, report, public=True)
+    _ensure_dir(root / ATLAS_IDP_DIR, root, report)
+    _ensure_dir(root / CLIENTS_DIR, root, report)
 
     ca_key, ca_cert = _ensure_ca(root, report)
     _ensure_server_cert(root, ca_key, ca_cert, opts.rotate_cert, report)

@@ -39,6 +39,9 @@ Added for the IdP bootstrap (PLAN Phase 5b-2), checked the same way:
   same id. A deleted token that is less than 300 seconds old keeps working until it
   reaches that age; an older one stops at once.
 - An API token is a JWS whose payload names its own `token_id`.
+- `DELETE /v1/oauth2/{id}/_scopemap/{group}` is 200 and removes only that group's map
+  from that client; again, or for a group that has none, it is 200. A missing group or
+  client is 404. The group may be a name or a UUID.
 
 Rules this module keeps:
 
@@ -793,6 +796,22 @@ class KanidmClient:
         """Remove a redirect URL. Idempotent: removing one that is not set succeeds."""
         await self._redirect_url("DELETE", name, url)
 
+    async def remove_unwanted_oauth2_redirect_url(self, name: str, url: str) -> None:
+        """Remove a redirect URL that is already set on the client, whatever its scheme.
+
+        `remove_oauth2_redirect_url` only takes URLs this module would add, so it cannot
+        remove an `http://` one that someone set by hand. This can: removing never
+        widens what a client accepts. Idempotent.
+        """
+        if not isinstance(url, str) or not url or any(c.isspace() or ord(c) < 0x20 for c in url):
+            raise ValueError("url must be a non-empty string without whitespace")
+        await self._write(
+            "DELETE",
+            "/v1/oauth2/{id}/_attr/oauth2_rs_origin",
+            path={"id": _name(name)},
+            body=[url],
+        )
+
     async def _redirect_url(self, method: str, name: str, url: str) -> None:
         # Always with the one URL as the body: a DELETE without a body would remove
         # the whole attribute.
@@ -814,6 +833,20 @@ class KanidmClient:
             "/v1/oauth2/{id}/_scopemap/{group}",
             path={"id": _name(name), "group": _id(group, "group")},
             body=_values(scopes, "scopes"),
+        )
+
+    async def remove_oauth2_scope_map(self, name: str, group: str) -> None:
+        """Remove the scope map of `group` from this client, and only that one.
+
+        `group` is the group's name or UUID. Idempotent: a group with no map is a 200
+        too (checked against Kanidm 1.12.0: another group's map, and the same group's
+        map on another client, stay). A missing group or client is KanidmNotFound.
+        """
+        await self._write(
+            "DELETE",
+            "/v1/oauth2/{id}/_scopemap/{group}",
+            path={"id": _name(name), "group": _id(group, "group")},
+            body=None,
         )
 
     async def get_oauth2_basic_secret(self, name: str) -> SecretStr | None:

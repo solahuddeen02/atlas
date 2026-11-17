@@ -18,7 +18,7 @@ The phases of the Foundation plan ([PLAN](docs/PLAN-v1.md)), in order:
 | 2 | Config & secrets | Done¹ |
 | 3 | Database & migrations | Done¹ |
 | 4 | Deploy skeleton (proxy, images, one-command install) | Done¹ |
-| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure) and 5b-1 (Kanidm client library) done; the IdP bootstrap (5b-2) next |
+| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure), 5b-1 (Kanidm client library) and 5b-2 (the IdP bootstrap) done; the OIDC login, sessions and adapters (5c) next |
 | 6 | Authorization core | Planned |
 | 7 | Module registry | Planned |
 | 8 | Admin console | Planned |
@@ -30,7 +30,7 @@ The phases of the Foundation plan ([PLAN](docs/PLAN-v1.md)), in order:
 - its compose service, external volume, internal networks and proxy virtual host, with verified internal TLS;
 - its backup and restore.
 
-Still to come in Phase 5b: the IdP bootstrap (the admin token and the generated OIDC client secret) and login. Until then `ATLAS_OIDC_CLIENT_SECRET` is set by hand.
+Still to come in Phase 5c: login, sessions and the identity adapters. The IdP bootstrap (Phase 5b-2) is done: with the bundled IdP, the OIDC client, its secret and the role groups are created for you.
 
 ## Requirements
 
