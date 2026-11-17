@@ -244,7 +244,8 @@ class Stack:
 
     def logs(self, *services: str) -> str:
         result = self.compose("logs", "--no-color", *services, check=False)
-        return (result.stdout + result.stderr)[-8000:]
+        # Kanidm logs every request of the IdP bootstrap, so its start-up lines are far back.
+        return (result.stdout + result.stderr)[-200000:]
 
     def request(
         self,
