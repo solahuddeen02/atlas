@@ -35,6 +35,8 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from atlas.kernel.identity.record import LOGS_HINT, record_problem
+
 
 class Environment(StrEnum):
     PRODUCTION = "production"
@@ -43,6 +45,8 @@ class Environment(StrEnum):
 
 
 DEFAULT_ENV_FILES = "/run/secrets/atlas/app.env,/run/secrets/atlas/connectors.env"
+# The file `atlas-admin idp-bootstrap` writes into the bundled IdP's env file list.
+BOOTSTRAP_ENV_FILE = "idp.env"
 CONNECTOR_PREFIX = "ATLAS_CONNECTOR_"
 
 MIN_SECRET_KEY_LENGTH = 43  # 32 random bytes, base64url-encoded
@@ -150,6 +154,27 @@ def check_idp_public_url(value: str, *, production: bool) -> str:
         raise ValueError("must not contain a user name or password")
     if parts.path not in ("", "/") or parts.query or parts.fragment:
         raise ValueError("must be an origin with no path: the IdP needs its own hostname")
+    host = parts.hostname.lower()
+    if not _HOST_NAME.match(host):
+        raise ValueError("has an invalid host name")
+    if production and any(host == d or host.endswith("." + d) for d in PLACEHOLDER_DOMAINS):
+        raise ValueError("still uses a placeholder domain (example.com); set your real URL")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("has an invalid port") from None
+    return f"https://{host}" + (f":{port}" if port not in (None, 443) else "")
+
+
+def check_immich_public_url(value: str, *, production: bool) -> str:
+    """ATLAS_IMMICH_PUBLIC_URL: the origin Immich is served at (its OAuth2 redirect URIs)."""
+    parts = urlsplit(value.strip())
+    if parts.scheme != "https" or not parts.hostname:
+        raise ValueError("must be an absolute https:// URL")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("must not contain a user name or password")
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise ValueError("must be an origin with no path")
     host = parts.hostname.lower()
     if not _HOST_NAME.match(host):
         raise ValueError("has an invalid host name")
@@ -286,10 +311,9 @@ class Settings(DatabaseSettings):
     public_url: str = Field(validation_alias="ATLAS_PUBLIC_URL")
 
     # Generic OIDC relying-party settings: the same for any provider. With the bundled
-    # IdP the issuer defaults from ATLAS_IDP_PUBLIC_URL (see `oidc_issuer`).
-    # TODO(phase-5b): ATLAS_IDP_ADMIN_TOKEN, and the client secret written by the IdP
-    # bootstrap. Until then ATLAS_OIDC_CLIENT_SECRET is set by hand, also with the
-    # bundled IdP.
+    # IdP the issuer defaults from ATLAS_IDP_PUBLIC_URL (see `oidc_issuer`), and the
+    # client secret comes from secrets/atlas-idp/idp.env, written by `atlas-admin
+    # idp-bootstrap` and listed last in ATLAS_ENV_FILES so that it wins over app.env.
     oidc_issuer_setting: str | None = Field(default=None, validation_alias="ATLAS_OIDC_ISSUER")
     oidc_client_id: str = Field(
         default="atlas",
@@ -300,6 +324,18 @@ class Settings(DatabaseSettings):
     oidc_client_secret: SecretStr = Field(validation_alias="ATLAS_OIDC_CLIENT_SECRET")
     identity_admin_setting: Literal["kanidm", "manual"] | None = Field(
         default=None, validation_alias="ATLAS_IDENTITY_ADMIN"
+    )
+    # The console's service-account token for the bundled IdP's admin API, written by
+    # the IdP bootstrap. Optional until the adapter that uses it exists (Phase 5c).
+    idp_admin_token: SecretStr | None = Field(
+        default=None, validation_alias="ATLAS_IDP_ADMIN_TOKEN"
+    )
+    # The IdP bootstrap's completion record. With the bundled IdP, `load_settings` refuses
+    # to start the process unless it says the last run completed (see identity/record.py).
+    # The default is where docker-compose.yml mounts it.
+    idp_bootstrap_record: Path = Field(
+        default=Path("/run/secrets/atlas-idp/bootstrap.json"),
+        validation_alias="ATLAS_IDP_BOOTSTRAP_RECORD",
     )
 
     log_level: Literal["debug", "info", "warning", "error"] = Field(
@@ -459,6 +495,57 @@ class InitSettings(BaseSettings):
         return self.idp_public_url is not None
 
 
+class BootstrapSettings(BaseSettings):
+    """Settings for `atlas-admin idp-bootstrap` (the bundled IdP's one-shot setup).
+
+    It needs the two public URLs (the OIDC callback and the IdP's domain) and, when
+    Immich is connected, Immich's origin. No secret: those are written, never read, and
+    the process loads no env file.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    env: Environment = Field(default=Environment.PRODUCTION, validation_alias="ATLAS_ENV")
+    public_url: str = Field(validation_alias="ATLAS_PUBLIC_URL")
+    idp_public_url: str = Field(validation_alias="ATLAS_IDP_PUBLIC_URL")
+    immich_public_url: str | None = Field(default=None, validation_alias="ATLAS_IMMICH_PUBLIC_URL")
+
+    @field_validator("public_url")
+    @classmethod
+    def _validate_public_url(cls, value: str, info: ValidationInfo) -> str:
+        return _check_url(value, production=_is_production(info))
+
+    @field_validator("idp_public_url")
+    @classmethod
+    def _validate_idp_public_url(cls, value: str, info: ValidationInfo) -> str:
+        return check_idp_public_url(value, production=_is_production(info))
+
+    @field_validator("immich_public_url", mode="before")
+    @classmethod
+    def _validate_immich_public_url(cls, value: object, info: ValidationInfo) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if not isinstance(value, str):
+            return value
+        return check_immich_public_url(value, production=_is_production(info))
+
+    @model_validator(mode="after")
+    def _distinct_hosts(self) -> BootstrapSettings:
+        if _host(self.idp_public_url) == _host(self.public_url):
+            raise ValueError(
+                "ATLAS_IDP_PUBLIC_URL: must use a different host name than ATLAS_PUBLIC_URL "
+                "(the IdP needs its own origin)"
+            )
+        if self.immich_public_url is not None:
+            immich = _host(self.immich_public_url)
+            if immich in (_host(self.idp_public_url), _host(self.public_url)):
+                raise ValueError(
+                    "ATLAS_IMMICH_PUBLIC_URL: must use a different host name than "
+                    "ATLAS_PUBLIC_URL and ATLAS_IDP_PUBLIC_URL (Immich has its own origin)"
+                )
+        return self
+
+
 _M = TypeVar("_M", bound=BaseSettings)
 _D = TypeVar("_D", bound=DatabaseSettings)
 
@@ -502,14 +589,21 @@ def _env_files(environ: Mapping[str, str]) -> list[Path]:
     return [Path(p.strip()) for p in raw.split(",") if p.strip()]
 
 
+def _missing_file_problem(path: Path) -> str:
+    if path.name == BOOTSTRAP_ENV_FILE:
+        # Not `atlas-admin init`'s: the bundled IdP's bootstrap writes it.
+        return (
+            f"ATLAS_ENV_FILES: file not found: {path} (written by the IdP bootstrap; {LOGS_HINT})"
+        )
+    return f"ATLAS_ENV_FILES: file not found: {path} (run `atlas-admin init`)"
+
+
 def _load(model: type[_D]) -> tuple[_D, list[Path]]:
     """Build `model` for a running process from the env files and the environment."""
     files = _env_files(os.environ)
-    missing = [str(p) for p in files if not p.is_file()]
+    missing = [p for p in files if not p.is_file()]
     if missing:
-        raise ConfigError(
-            [f"ATLAS_ENV_FILES: file not found: {p} (run `atlas-admin init`)" for p in missing]
-        )
+        raise ConfigError([_missing_file_problem(p) for p in missing])
     settings = _build(model, _env_file=tuple(files))
     if settings.env == Environment.TEST:
         raise ConfigError(["ATLAS_ENV: 'test' is only for Settings built inside tests"])
@@ -517,8 +611,16 @@ def _load(model: type[_D]) -> tuple[_D, list[Path]]:
 
 
 def load_settings() -> Settings:
-    """Build `Settings` for the API process."""
+    """Build `Settings` for the API process.
+
+    With the bundled IdP the process also refuses to start unless the IdP bootstrap's
+    record says its last run completed. Settings built directly (tests) skip that check.
+    """
     settings, files = _load(Settings)
+    if settings.bundled_idp:
+        problem = record_problem(settings.idp_bootstrap_record)
+        if problem is not None:
+            raise ConfigError([f"ATLAS_IDP_BOOTSTRAP_RECORD: {problem}"])
     connector_secrets: dict[str, str] = {}
     for path in files:
         for key, value in dotenv_values(path).items():
@@ -542,3 +644,7 @@ def load_db_init_settings() -> DbInitSettings:
 
 def load_init_settings() -> InitSettings:
     return _build(InitSettings)
+
+
+def load_bootstrap_settings() -> BootstrapSettings:
+    return _build(BootstrapSettings)
