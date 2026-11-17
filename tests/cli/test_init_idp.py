@@ -424,3 +424,81 @@ def test_cli_admin_dir_flag(
     assert "warning: --idp-admin-dir is only prepared together with --chown" in (
         capsys.readouterr().out
     )
+
+
+# --- the IdP bootstrap's directories (5b-2b) ---------------------------------------------
+# atlas-idp/ (what atlas-api reads) and idp-clients/ (Immich's secret). Only the directories:
+# the files in them belong to `atlas-admin idp-bootstrap`.
+
+
+def chown_calls(secrets_dir: Path, tmp_path: Path, **kwargs: object) -> dict[str, tuple[int, int]]:
+    calls: list[tuple[str, int, int]] = []
+    mp = pytest.MonkeyPatch()
+    mp.setattr(os, "chown", lambda path, uid, gid: calls.append((str(path), uid, gid)))
+    try:
+        run_init(secrets_dir, **kwargs)  # type: ignore[arg-type]
+    finally:
+        mp.undo()
+    return {Path(p).relative_to(tmp_path).as_posix(): (u, g) for p, u, g in calls}
+
+
+def test_bundled_init_creates_the_bootstrap_directories(secrets_dir: Path, backups: Path) -> None:
+    report = run_init(secrets_dir, backup_dir=backups, idp=OPTS)
+    for name in ("atlas-idp", "idp-clients"):
+        assert f"{name}/" in report.created
+        assert mode(secrets_dir / name) == 0o700  # strict without --chown
+        assert list((secrets_dir / name).iterdir()) == []
+    assert "atlas-idp/" not in run_init(secrets_dir, backup_dir=backups, idp=OPTS).created
+
+
+def test_chown_gives_the_bootstrap_directories_to_the_idp_user(
+    secrets_dir: Path, backups: Path, tmp_path: Path
+) -> None:
+    owner = chown_calls(secrets_dir, tmp_path, backup_dir=backups, owners=Ownership(), idp=OPTS)
+    # idp user, atlas group: atlas-api reads idp.env and groups.json through the group.
+    assert owner["secrets/atlas-idp"] == (10002, 10001)
+    # Nobody but the idp user: it holds other applications' client secrets.
+    assert owner["secrets/idp-clients"] == (10002, 10002)
+
+
+def test_chown_modes_of_the_bootstrap_directories(secrets_dir: Path, backups: Path) -> None:
+    report = run_init(secrets_dir, backup_dir=backups, owners=owners_self(), idp=OPTS)
+    # setgid, so files the bootstrap writes there get the atlas group.
+    assert stat.S_IMODE((secrets_dir / "atlas-idp").stat().st_mode) == 0o2750
+    assert mode(secrets_dir / "idp-clients") == 0o700
+    assert report.warnings == []
+    again = run_init(secrets_dir, backup_dir=backups, owners=owners_self(), idp=OPTS)
+    assert again.warnings == []
+    assert stat.S_IMODE((secrets_dir / "atlas-idp").stat().st_mode) == 0o2750
+
+
+def test_byo_atlas_idp_dir_belongs_to_root_and_the_atlas_group(
+    secrets_dir: Path, tmp_path: Path
+) -> None:
+    # atlas-api mounts atlas-idp/ in both modes, so atlas-init creates it in both; in BYO
+    # mode it stays empty, and there is no idp-clients/.
+    owner = chown_calls(secrets_dir, tmp_path, owners=Ownership())
+    assert owner["secrets/atlas-idp"] == (os.geteuid(), 10001)
+    assert mode(secrets_dir / "atlas-idp") == 0o750
+    assert list((secrets_dir / "atlas-idp").iterdir()) == []
+    assert not (secrets_dir / "idp-clients").exists()
+
+
+def test_files_in_the_bootstrap_directories_are_never_touched(
+    secrets_dir: Path, backups: Path
+) -> None:
+    run_init(secrets_dir, backup_dir=backups, owners=owners_self(), idp=OPTS)
+    written = {
+        "atlas-idp/idp.env": "written by the bootstrap\n",
+        "atlas-idp/groups.json": "{}\n",
+        "idp-clients/immich.env": "written by the bootstrap\n",
+    }
+    for name, text in written.items():
+        (secrets_dir / name).write_text(text)
+        (secrets_dir / name).chmod(0o640)
+    before = {n: (secrets_dir / n).stat() for n in written}
+    run_init(secrets_dir, backup_dir=backups, owners=owners_self(), idp=OPTS)
+    for name, text in written.items():
+        assert (secrets_dir / name).read_text() == text
+        assert mode(secrets_dir / name) == 0o640
+        assert (secrets_dir / name).stat().st_mtime_ns == before[name].st_mtime_ns

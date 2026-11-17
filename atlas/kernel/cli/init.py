@@ -43,6 +43,13 @@ FILE_MODE = 0o600
 IDP_TRUST_DIR = "idp-trust"
 IDP_TRUST_DIR_MODE = 0o755
 
+# Where the IdP bootstrap writes what atlas-api reads (idp.env, groups.json) and its own
+# record. atlas-api mounts it read-only in both modes, so init creates it in both and,
+# with --chown, gives it to root and the Atlas group (0750). Empty in BYO mode. With the
+# bundled IdP, atlas-idp-init then hands it to the bootstrap's user (see atlas.kernel.cli.idp).
+ATLAS_IDP_DIR = "atlas-idp"
+ATLAS_IDP_DIR_MODE = 0o750
+
 
 class InitError(RuntimeError):
     pass
@@ -62,9 +69,11 @@ APP_ENV_GENERATORS: dict[str, Callable[[], str]] = {
     "DATABASE_URL": lambda: _database_url(APP_ROLE),
     "ATLAS_MIGRATOR_DATABASE_URL": lambda: _database_url(MIGRATOR_ROLE),
 }
-# TODO(phase-5b): bundled IdP only, after its bootstrap: ATLAS_OIDC_CLIENT_SECRET and
-# ATLAS_IDP_ADMIN_TOKEN in atlas/app.env. The IdP's CA, certificate and server.toml are
-# written by atlas.kernel.cli.idp (Phase 5a).
+# With the bundled IdP, ATLAS_OIDC_CLIENT_SECRET and ATLAS_IDP_ADMIN_TOKEN are not
+# generated here: `atlas-admin idp-bootstrap` writes them to atlas-idp/idp.env, because
+# Kanidm makes the client secret and the console token, and a value kept here could
+# disagree with it. app.env stays append-only. The IdP's CA, certificate and server.toml
+# are written by atlas.kernel.cli.idp.
 # The atlas_app/atlas_migrator roles are created from these passwords by
 # `atlas-admin db-init` (atlas.kernel.db.bootstrap) once Postgres is up.
 
@@ -218,6 +227,9 @@ def _apply_ownership(root: Path, backup_dir: Path | None, owners: Ownership) -> 
     # atlas-init (changing any other owner above needs root already).
     _set_owner(root / IDP_TRUST_DIR, os.geteuid(), os.getegid(), IDP_TRUST_DIR_MODE)
 
+    # Likewise only the directory: the files in it belong to the IdP bootstrap.
+    _set_owner(root / ATLAS_IDP_DIR, os.geteuid(), owners.app_gid, ATLAS_IDP_DIR_MODE)
+
 
 def run_init(
     secrets_dir: Path,
@@ -244,6 +256,7 @@ def run_init(
     _ensure_secret_file(postgres_dir / "password", root, report)
 
     _ensure_dir(root / IDP_TRUST_DIR, root, report, public=True)
+    _ensure_dir(root / ATLAS_IDP_DIR, root, report)
 
     if backup_dir is not None and not backup_dir.exists():
         backup_dir.mkdir(mode=DIR_MODE, parents=True)
