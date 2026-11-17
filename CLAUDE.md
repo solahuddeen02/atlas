@@ -11,7 +11,8 @@ an admin console, and a module registry. Pre-1.0. Status per phase: `README.md` 
 **Phase 5a is done** (bundled IdP service, volume, networks, vhost, internal CA, backup).
 **Phase 5b-1 is done** (the Kanidm client library, `atlas/kernel/identity/kanidm/`).
 **Phase 5b-2 is done** (the admin socket's own volume; the IdP bootstrap service `atlas-idp-bootstrap`, with `atlas-api` gated on its completion record).
-**Next: Phase 5c**: the RP (login, sessions) and the `IdentityAdmin` adapters.
+**Phase 5b-3a is done** (the console's least privilege: it manages its six groups and is no longer in `idm_group_admins`; bootstrap version 2).
+**Next: 5b-3b** (the `IdentityAdmin` protocol with the `kanidm` and `fake` adapters), then Phase 5c: the RP (login, sessions).
 Follow ADR-001 → "Workarounds and design consequences".
 
 ## Read first

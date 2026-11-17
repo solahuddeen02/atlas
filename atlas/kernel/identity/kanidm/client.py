@@ -715,6 +715,15 @@ class KanidmClient:
         from Kanidm 1.12.0 (KanidmServerError), not a 404."""
         await self._group_attr("POST", group, "member", members)
 
+    async def remove_group_members(self, group: str, members: Sequence[str]) -> None:
+        """Remove members by name. Idempotent: a name that is not a member is a 200 too
+        (checked against Kanidm 1.12.0).
+
+        Always sent with the names as the body: a DELETE without one would remove the
+        whole `member` attribute, every member of the group.
+        """
+        await self._group_attr("DELETE", group, "member", members)
+
     async def _group_attr(self, method: str, group: str, attr: str, values: Sequence[str]) -> None:
         if not _ATTR.fullmatch(attr):
             raise ValueError("invalid Kanidm attribute name")

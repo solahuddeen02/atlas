@@ -74,6 +74,7 @@ class FakeIdp:
         self.admin_password: str | None = None
         self.admin_enabled = True
         self.logged_in = False
+        self.persons: set[str] = set()
         for name in ("idm_admins", "idm_people_admins", "idm_group_admins"):
             self._new_group(name)
         self._new_group("idm_all_persons")
@@ -86,7 +87,9 @@ class FakeIdp:
     async def _enter(self, method: str, *args: object, admin: bool = True) -> None:
         first = str(args[0]) if args else ""
         self.trace.append(f"idp.{method}:{first}" if first else f"idp.{method}")
-        for key in (f"{method}:{first}", method):
+        # `method:first:second` tells apart calls that share a method and a first argument,
+        # e.g. set_group_attr:atlas_role_adult:entry_managed_by.
+        for key in (":".join([method, *map(str, args)]), f"{method}:{first}", method):
             if key in self.fail_on:
                 raise self.fail_on.pop(key)
         if admin and method != "login" and not self.logged_in:
@@ -121,6 +124,8 @@ class FakeIdp:
             "uuid": (str(group["uuid"]),),
             "class": tuple(sorted(group["class"])),  # type: ignore[call-overload]
         }
+        if "managed_by" in group:
+            attrs["entry_managed_by"] = (str(group["managed_by"]),)
         if group["member"]:
             attrs["member"] = tuple(sorted(group["member"]))  # type: ignore[call-overload]
         for attr in ("credential_type_minimum", "authsession_expiry"):
@@ -170,16 +175,36 @@ class FakeIdp:
     async def set_group_attr(self, group: str, attr: str, values: Sequence[str]) -> None:
         await self._enter("set_group_attr", group, attr)
         _, record = self._group_for_write(group, "PUT /v1/group/{id}/_attr/{attr}")
-        assert attr in ("credential_type_minimum", "authsession_expiry")
+        assert attr in ("credential_type_minimum", "authsession_expiry", "entry_managed_by")
+        if attr == "entry_managed_by":
+            self.trace.append(f"idp.set_managed_by:{group}")
+            record["managed_by"] = values[0]
+            return
         record[attr] = values[0]
 
     async def add_group_members(self, group: str, members: Sequence[str]) -> None:
         await self._enter("add_group_members", group)
         _, record = self._group_for_write(group, "POST /v1/group/{id}/_attr/member")
         for member in members:
-            if member not in self.groups and member not in self.accounts:
+            if (
+                member not in self.groups
+                and member not in self.accounts
+                and member not in self.persons
+            ):
                 raise KanidmServerError("Kanidm reported an error", operation="POST", status=500)
             record["member"] = set(record["member"]) | {self._spn(member)}  # type: ignore[call-overload]
+
+    async def remove_group_members(self, group: str, members: Sequence[str]) -> None:
+        await self._enter("remove_group_members", group)
+        _, record = self._group_for_write(group, "DELETE /v1/group/{id}/_attr/member")
+        assert members, "an empty body would remove every member"
+        self.trace.append(f"idp.removed_members:{group}")
+        gone = {self._spn(m) for m in members}
+        record["member"] = set(record["member"]) - gone  # type: ignore[call-overload]
+
+    def add_person(self, name: str) -> None:
+        """A person (never a group or a service account), e.g. a household member."""
+        self.persons.add(name)
 
     # --- service accounts and tokens ----------------------------------------------
 
@@ -384,7 +409,12 @@ def socket_error() -> KanidmAdminSocketError:
 
 
 class FakeSession:
-    """A connection with a bearer token: it can only read groups, and only with a valid token."""
+    """A connection with the console's token.
+
+    It can only read groups, only with a valid token, and (as in Kanidm 1.12.0, probe P7)
+    only the groups it manages or, while it is a member of idm_group_admins, every group.
+    A group it cannot see is `200 null`.
+    """
 
     def __init__(self, idp: FakeIdp, token: SecretStr) -> None:
         self._idp = idp
@@ -395,7 +425,14 @@ class FakeSession:
             raise KanidmAuthError(
                 "not authenticated", operation="GET", status=401, reason="not_authenticated"
             )
-        return await self._idp.get_group(name, admin=False)
+        entry = await self._idp.get_group(name, admin=False)
+        if entry is None:
+            return None
+        console = self._idp.accounts.get("atlas-console")
+        group_admins = self._idp.groups["idm_group_admins"]["member"]
+        sees_all = f"atlas-console@{DOMAIN}" in group_admins  # type: ignore[operator]
+        manages = console is not None and entry.first("entry_managed_by") == console["uuid"]
+        return entry if (sees_all or manages) else None
 
 
 def make_connect(idp: FakeIdp):  # type: ignore[no-untyped-def]

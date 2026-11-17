@@ -539,7 +539,8 @@ def test_rotating_the_console_token_leaves_one_token_and_a_working_stored_one(
         "    token = SecretStr(dotenv_values('/state/idp.env')['ATLAS_IDP_ADMIN_TOKEN'])\n"
         "    async with KanidmClient(base_url='https://idp:8443', ca_file=Path('/ca/ca.pem'),\n"
         "                            token=token) as c:\n"
-        "        entry = await c.get_group('atlas_users')\n"
+        # A group the console manages: since 5b-3a it cannot see atlas_users.
+        "        entry = await c.get_group('atlas_role_owner')\n"
         "    return [api_token_id(token), entry is not None]\n"
         "print(json.dumps(asyncio.run(main())))\n"
     )

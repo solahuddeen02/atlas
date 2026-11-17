@@ -321,6 +321,7 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
         "issue_api_token",
         "list_api_tokens",
         "login",
+        "remove_group_members",
         "remove_oauth2_redirect_url",
         "remove_oauth2_scope_map",
         "remove_unwanted_oauth2_redirect_url",
@@ -333,12 +334,14 @@ def test_the_client_has_no_call_that_deletes_a_whole_attribute(ca_file: Path) ->
     async def calls(client: KanidmClient) -> None:
         await client.remove_oauth2_redirect_url("atlas", "https://atlas.example.com/old")
         await client.delete_api_token("atlas-console", LISTED_ID)
+        await client.remove_group_members("atlas_role_guest", ["atlas-console"])
 
     call_with(handler, ca_file, calls)
     deletes = [(r.url.path, body_of(r)) for r in handler.requests if r.method == "DELETE"]
     assert deletes == [
         ("/v1/oauth2/atlas/_attr/oauth2_rs_origin", ["https://atlas.example.com/old"]),
         (f"/v1/service_account/atlas-console/_api_token/{LISTED_ID}", None),
+        ("/v1/group/atlas_role_guest/_attr/member", ["atlas-console"]),
     ]
 
 
