@@ -242,8 +242,14 @@ def test_a_missing_record_stops_the_bundled_api(
     [
         ({"version": BOOTSTRAP_VERSION, "digest": "x", "complete": False}, "has not completed"),
         ({"version": BOOTSTRAP_VERSION, "digest": "x"}, "has not completed"),
-        ({"version": BOOTSTRAP_VERSION - 1, "digest": "x", "complete": True}, "from version 0"),
-        ({"version": BOOTSTRAP_VERSION + 1, "digest": "x", "complete": True}, "from version 2"),
+        (
+            {"version": BOOTSTRAP_VERSION - 1, "digest": "x", "complete": True},
+            f"from version {BOOTSTRAP_VERSION - 1}",
+        ),
+        (
+            {"version": BOOTSTRAP_VERSION + 1, "digest": "x", "complete": True},
+            f"from version {BOOTSTRAP_VERSION + 1}",
+        ),
         ("not json", "unreadable"),
     ],
 )
