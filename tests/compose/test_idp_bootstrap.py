@@ -138,7 +138,8 @@ async def body(client):
                                entry.first("authsession_expiry")]
     for name in ("idm_all_persons", "atlas_users"):
         entry = await client.get_group(name)
-        out["groups"][name] = [entry.first("credential_type_minimum"), sorted(entry.attrs.get("member", ()))]
+        members = sorted(entry.attrs.get("member", ()))
+        out["groups"][name] = [entry.first("credential_type_minimum"), members]
     for name in ("atlas", "immich"):
         entry = await client.get_oauth2_client(name)
         if entry is None:
@@ -195,7 +196,8 @@ def idm_admin_is_disabled(stack: Stack) -> bool:
         "from pydantic import SecretStr\n"
         "from atlas.kernel.identity.kanidm import KanidmAuthError, KanidmClient\n"
         "async def main():\n"
-        "    async with KanidmClient(base_url='https://idp:8443', ca_file=Path('/ca/ca.pem')) as c:\n"
+        "    ca = Path('/ca/ca.pem')\n"
+        "    async with KanidmClient(base_url='https://idp:8443', ca_file=ca) as c:\n"
         "        try:\n"
         "            await c.login('idm_admin', SecretStr('definitely-not-the-password-1'))\n"
         "        except KanidmAuthError as exc:\n"
