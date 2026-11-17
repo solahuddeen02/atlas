@@ -13,6 +13,7 @@ an admin console, and a module registry. Pre-1.0. Status per phase: `README.md` 
 **Phase 5b-2 is done** (the admin socket's own volume; the IdP bootstrap service `atlas-idp-bootstrap`, with `atlas-api` gated on its completion record).
 **Phase 5b-3a is done** (the console's least privilege: it manages its six groups and is no longer in `idm_group_admins`; bootstrap version 2).
 **Phase 5b-3b is done** (the `IdentityAdmin` protocol with the `kanidm` and `fake` adapters, `atlas/kernel/identity/`).
+**Phase 5b is done** (5b-4: the auth-expiry test; result in ADR-001, Gap 5).
 **Next: Phase 5c**: the RP (login, sessions).
 Follow ADR-001 → "Workarounds and design consequences".
 

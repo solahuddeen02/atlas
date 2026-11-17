@@ -271,7 +271,11 @@ With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just
 Interactive Atlas login sends `prompt=login` **by default**, with a setting to turn it off (its name is chosen in Phase 5). A lingering IdP session on a shared device therefore never silently signs the next person in to Atlas.
 Known limitation: Immich may still reuse a lingering IdP session.
 
-Possible mitigation, untested: Kanidm 1.12.0 account policy has a per-group auth-expiry setting. Whether it bounds the browser IdP session, and which value applies across several groups, must be tested (in Phase 5a, against the bundled stack) before relying on it.
+Possible mitigation, **checked on Kanidm 1.12.0 (Phase 5b-4)**: the per-group account-policy setting `authsession_expiry` (class `account_policy`). Probed on a throwaway bundled stack and pinned by `tests/compose/test_idp_auth_expiry.py` with a 60 s value, through the real browser flow: the session cookie, then the authorisation endpoint `/ui/oauth2` that discovery advertises.
+- **It bounds the browser session.** Once the value has passed, `/v1/self` with the session cookie is 401 and the authorisation request for the `atlas` client shows the login page. Before that it showed the consent page the first time and redirected with a code afterwards. A person with a longer value, or none, is unaffected by another person's shorter one. (The probe saw the same at 300 s.)
+- **The shortest value applies.** A person in a 60 s group and a 300 s group gets 60 s (read from the session token's own expiry claim); one in the 300 s group alone gets 300 s. A group value above 86 400 s changes nothing: the session still gets 86 400 s, Kanidm's default.
+- **A refresh token from before the expiry is not a sign that the Kanidm session is alive.** 10 s after the expiry the grant answered 200, but the access token it issued was refused by the userinfo endpoint (401); 80 s after, it answered 400 `invalid_grant`. In the same run a person whose session had not expired got a usable access token every time. The test pins only the safe property: no usable access token comes out of a refresh token after the expiry.
+- This bounds how long a forgotten IdP session lasts. It is not a logout, and the decision above is unchanged.
 
 **Gap 10: no session listing or revocation for other people (row 10).** The fallback in the row note is adopted:
 - Atlas revokes only its own sessions.
