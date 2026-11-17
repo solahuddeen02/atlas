@@ -311,7 +311,7 @@ docker compose logs atlas-idp-bootstrap
 |---|---|
 | Groups | `atlas_users`, the five role groups `atlas_role_owner`, `atlas_role_admin`, `atlas_role_adult`, `atlas_role_child` and `atlas_role_guest` (each a member of `atlas_users`), and `immich_users` with Immich. Atlas maps groups by UUID, from `secrets/atlas-idp/groups.json`, never by name |
 | Sign-in policies | Owner and admin need a second factor (`mfa`) and sign out after 8 hours. Adults need a second factor. Children and guests may use a password alone. Kanidm applies the strictest policy of a person's groups, so `idm_all_persons` is lowered to `any` only after all five role groups carry theirs, and the bootstrap checks that order itself |
-| The console's account | The service account `atlas-console`, managed by `idm_admins`, a member of `idm_people_admins` and `idm_group_admins`, with exactly one API token labelled `atlas-console` |
+| The console's account | The service account `atlas-console`, managed by `idm_admins` and a member of `idm_people_admins`, with exactly one API token labelled `atlas-console`. It manages the five role groups and `immich_users`: [the console's limited rights](#the-consoles-limited-rights) |
 | Atlas's OIDC client | `atlas`, with `https://atlas.example.com/api/v1/auth/callback` as its landing URL and its only redirect URL, strict redirect matching, PKCE required, the legacy RS256 signing off, and the scopes `openid profile groups` for `atlas_users` |
 | Immich's OIDC client | Only with `ATLAS_IMMICH_PUBLIC_URL` set: [Connecting Immich](#connecting-immich) |
 | Files | `secrets/atlas-idp/idp.env` (the client secret and the console token, for `atlas-api`), `groups.json`, `bootstrap.json`, and `secrets/idp-clients/immich.env` |
@@ -324,13 +324,28 @@ docker compose logs atlas-idp-bootstrap
 
 **`idm_admin` is disabled again** whenever the bootstrap is done, whether it succeeded or failed, and also when it is stopped by SIGTERM. The password the bootstrap gets for it and its session never touch a disk or a log. Only a SIGKILL or a power failure in the middle of a run can leave the account enabled, with a password nobody has, until the next `up`, which disables it again.
 
-**The fast path.** When nothing changed, a run does not reset any password and does not sign in. It skips all the steps above when the last run completed, the settings it depends on are unchanged, the stored console token works, and every group UUID in `groups.json` still matches Kanidm. It still sends `DisableAccount` for `idm_admin` over the socket, and if that fails, the run fails. The fast path cannot see someone changing a client or a policy in Kanidm; `--verify` can:
+**The fast path.** When nothing changed, a run does not reset any password and does not sign in. It skips all the steps above when the last run completed, the settings it depends on are unchanged, the stored console token works, and every group UUID in `groups.json` still matches Kanidm (as the console sees them: it cannot see `atlas_users`, which `--verify` checks). It still sends `DisableAccount` for `idm_admin` over the socket, and if that fails, the run fails. The fast path cannot see someone changing a client or a policy in Kanidm; `--verify` can:
 
 ```bash
 docker compose run --rm atlas-idp-bootstrap atlas-admin idp-bootstrap --verify
 ```
 
 `--verify` always does the full run and repairs any difference. Everything it finds right is logged as `kept`.
+
+#### The console's limited rights
+
+The console's API token (`ATLAS_IDP_ADMIN_TOKEN`) can act on people and on six groups, and on nothing else. This matters if the token ever leaks.
+
+- **It can:** create, read, delete and disable persons; issue a credential-reset link (and wipe a person's credential); add and remove members of the five role groups and `immich_users`. That is enough to make anyone an owner inside Atlas, so treat the token like an owner's password: it is only readable by `atlas-api` and the people with access to `secrets/atlas-idp/`.
+- **It cannot:** change who the Kanidm administrators are, change a role group's sign-in policy or session length, change `idm_all_persons`, `atlas_users` or any other group, create, rename or delete a group, hand a group over to someone else, see or change the OAuth2 clients or their secrets, issue a token for itself or for anyone, set a password directly, or act on `idm_admin` or on its own account.
+
+It gets this through Kanidm's `entry_managed_by`, not through `idm_group_admins`: that group would let it change the members of every group that is not high-privilege, including `atlas_users` and `idm_all_persons`, and delete or rename them. A test pins both lists against the real Kanidm, so a Kanidm upgrade that widens the token's rights fails CI.
+
+**`--verify` removes anything that is not a person from the six groups** (a service account or a group someone added by hand). It logs the group, the name and the UUID, nothing else. Persons are never removed.
+
+**Upgrading from an earlier pre-release:** the next `docker compose up -d` runs one full bootstrap (a few seconds) that sets the managers, checks each one, and only then removes the console from `idm_group_admins`. `atlas-api` waits for it as usual. If a run stops in between, the console keeps its old rights until the next run finishes the job. Nothing to change by hand.
+
+**Disabling a person.** Disabling an account in Kanidm (it sets `account_expire`) stops their existing Kanidm sessions and new logins, but **clearing it makes the old sessions valid again** until they reach their own lifetime (up to 24 hours, 8 hours for owners and admins). Changing the person's credential ends them for good. So when you disable someone because the account may be compromised, also issue a reset link, so that they set a new password and second factor: the old sessions then stay refused. A reset link cannot be revoked, and issuing a new one does not cancel an older one: each stays valid until it is used or expires, so keep the lifetime short.
 
 #### If the bootstrap fails
 

@@ -18,7 +18,7 @@ The phases of the Foundation plan ([PLAN](docs/PLAN-v1.md)), in order:
 | 2 | Config & secrets | Done¹ |
 | 3 | Database & migrations | Done¹ |
 | 4 | Deploy skeleton (proxy, images, one-command install) | Done¹ |
-| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure), 5b-1 (Kanidm client library) and 5b-2 (the IdP bootstrap) done; the OIDC login, sessions and adapters (5c) next |
+| 5 | Identity & sessions | In progress: 5a (bundled IdP infrastructure), 5b-1 (Kanidm client library), 5b-2 (the IdP bootstrap) and 5b-3a (the console's least privilege) done; the identity adapter (5b-3b), then the OIDC login and sessions (5c), next |
 | 6 | Authorization core | Planned |
 | 7 | Module registry | Planned |
 | 8 | Admin console | Planned |

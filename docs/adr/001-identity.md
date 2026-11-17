@@ -131,6 +131,8 @@ Libraries: `authlib` (as OP and RP), `argon2-cffi`, `pyotp`, `py_webauthn`, plus
 3. The console shows the token once, as a link and a QR code, for in-person hand-over.
 4. The person enrols a password + TOTP or a passkey.
 
+*As built (Phase 5b-3a):* the console's service account (`atlas-console`) is a member of `idm_people_admins`, which covers persons, and **not** of `idm_group_admins`. That group lets its members change the members of every group that is not high-privilege, including `idm_all_persons` and `atlas_users`, and delete or rename any of them (checked against Kanidm 1.12.0). Atlas needs six groups: the five role groups and `immich_users`. The bootstrap therefore sets `entry_managed_by` to `atlas-console` on those six, which gives the account the right to change their members and nothing else: it cannot hand a group to someone else, create, rename or delete groups, or touch any other group. The bootstrap sets the managers on all six, reads each one back, and only then removes the account from `idm_group_admins`; `--verify` also removes members of the six that are not persons. The six groups are not high-privilege, so nothing that reads them changes.
+
 **BYO OIDC (`IdentityAdmin` = `manual`):**
 1. The operator creates the identity in their own IdP.
 2. In Atlas, an admin creates the user and receives a one-time **link code** (a single-use, 24-hour URL).
@@ -274,6 +276,9 @@ Possible mitigation, untested: Kanidm 1.12.0 account policy has a per-group auth
 **Gap 10: no session listing or revocation for other people (row 10).** The fallback in the row note is adopted:
 - Atlas revokes only its own sessions.
 - Disabling a user ends their Atlas sessions and sets the Kanidm `account_expire`, which ends their Kanidm sessions and blocks new logins.
+  - *Checked on Kanidm 1.12.0 (Phase 5b-3a):* while `account_expire` is in the past, the person's existing Kanidm sessions are refused on their next request and a new login is denied. **Clearing `account_expire` makes those sessions valid again**, until they reach their own lifetime (86 400 s for a role group without its own session setting; 28 800 s for owner and admin). A **credential change ends them for good**: once the person commits a new password, second factor or passkey through a reset link (also while disabled), the old sessions stay refused after enabling. Nothing short of changing or removing the credential does this: the session attributes and any session route are refused to the console and to `idm_admin`.
+  - So a temporary disable lets old Kanidm sessions revive on enable. When an account is disabled because it may be compromised, also issue a reset link, so that the person sets a new credential. (A console action that does both comes with Phase 8.)
+  - A reset link cannot be revoked, and issuing a new one does not cancel an older one: each stays valid until it is used or expires (its lifetime is 5 minutes to 24 hours, 1 hour by default in Kanidm).
 - Atlas sessions also **re-validate with the IdP periodically** (refresh-token grant; a failure ends the session), so disables done outside Atlas take effect within that interval.
 
 **Other consequences for Phase 5:**

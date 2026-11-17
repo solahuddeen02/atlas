@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0 to 5b-2: the Kanidm client library and the IdP bootstrap).
+There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0 to 5b-3a: the Kanidm client library, the IdP bootstrap and the console's least privilege).
 
 ### Added
 
@@ -59,6 +59,12 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - `atlas-admin idp-bootstrap --verify` (a full run that repairs drift, and removes scope maps nobody here set from the two clients) and `--rotate-console-token`;
   - `atlas-api` does not start until a bootstrap has succeeded, every time: each run writes `complete: false` into `bootstrap.json` first and `complete: true` last, and `atlas-api` refuses to start on anything else (the new setting `ATLAS_IDP_BOOTSTRAP_RECORD`). Compose can't do this alone: a dependency declared optional only warns when it fails;
   - settings `ATLAS_IMMICH_PUBLIC_URL`, `ATLAS_IDP_ADMIN_TOKEN` (optional until the console uses it) and `ATLAS_IDP_BOOTSTRAP_RECORD`; the client's removal of one OAuth2 scope map and of a redirect URL of any scheme (to remove an `http://` one set by hand).
+- **The console's least privilege** (Phase 5b-3a, [ADR-001](docs/adr/001-identity.md)): bootstrap version 2. The console's service account no longer belongs to `idm_group_admins`, whose members can change every group that is not high-privilege (even delete `atlas_users`). It manages the five role groups and `immich_users` through `entry_managed_by` instead, and nothing else ([SELF_HOSTING → The console's limited rights](docs/SELF_HOSTING.md#the-consoles-limited-rights)).
+  - the bootstrap sets the manager on all six groups, reads each one back, and only then removes the console from `idm_group_admins`; a failure in between fails the run and the next run resumes;
+  - `atlas-admin idp-bootstrap --verify` also removes members of the six groups that are not persons (it logs the group, the name and the UUID);
+  - a compose test pins what the token can do and what it must be refused, against the real Kanidm, with an `idm_admin` snapshot around every refused write;
+  - the Kanidm client gains `remove_group_members`;
+  - `atlas-api` runs as one process on purpose, with a test that fails if more are configured (role changes need a cross-process lock first).
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -106,6 +112,11 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
+- **If you run a pre-release checkout from before the console's least privilege** (5b-3a), run `docker compose up -d` as usual:
+  - **The IdP bootstrap runs once more** (a few seconds; its version is now 2) and `atlas-api` waits for it. It makes the console's service account the manager of the five role groups and `immich_users`, checks each one, and only then removes the account from `idm_group_admins`. If it stops in between, the next `up` finishes the job.
+  - **Nothing to change by hand**, no new setting and no new file.
+  - **After the upgrade** the console's token can no longer change any other group, create or delete groups, or hand a group over; run `docker compose run --rm atlas-idp-bootstrap atlas-admin idp-bootstrap --verify` to also remove anything that is not a person from the six groups.
+  - **Disabling a person in Kanidm:** clearing the expiry makes their old sessions valid again for up to their lifetime; changing the credential ends them for good ([SELF_HOSTING](docs/SELF_HOSTING.md#the-consoles-limited-rights)).
 - **If you run a pre-release checkout from before the IdP bootstrap** (5b-2b), the bundled IdP is now configured for you. Run `./install.sh` as usual (or `docker compose up -d`):
   - **A new one-shot service, `atlas-idp-bootstrap`,** creates Atlas's OIDC client, the console's service account, the role groups and their credential policies, and writes `secrets/atlas-idp/idp.env`, `groups.json` and `bootstrap.json`. **`atlas-api` does not start until it has succeeded**, on this and on every later start. If it fails, read `docker compose logs atlas-idp-bootstrap`, fix the cause and run `docker compose up -d` again.
   - **New files and directories**, created by `atlas-init` and `atlas-idp-init`: `secrets/atlas-idp/` (also in bring-your-own mode, empty there) and `secrets/idp-clients/`. Back them up with the rest of `secrets/`.
