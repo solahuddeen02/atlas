@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0).
+There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0 to 5b-2: the Kanidm client library and the IdP bootstrap).
 
 ### Added
 
@@ -41,7 +41,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - an IdP virtual host in atlas-proxy for `ATLAS_IDP_PUBLIC_URL`: TLS re-encryption verified against the internal CA, the client address overwritten into `X-Forwarded-For`, and per-IP rate limits on Kanidm's credential endpoints;
   - `atlas-backup` copies Kanidm's newest online backup into each backup set. `atlas-admin restore` checks the Kanidm version and prints the offline IdP restore steps;
   - settings `ATLAS_IDP_PUBLIC_URL`, `ATLAS_IDP_FRONT_SUBNET`, `ATLAS_IDP_BACKUP_SCHEDULE`, `ATLAS_IDP_BACKUP_VERSIONS`, `ATLAS_RATE_LIMIT_IDP_AUTH` and `ATLAS_IDENTITY_ADMIN`. The OIDC issuer defaults from the IdP URL;
-  - not yet: the IdP bootstrap (OAuth2 clients, service account, groups) and login (Phase 5b). Until then `ATLAS_OIDC_CLIENT_SECRET` is still set by hand.
+  - the IdP bootstrap (OAuth2 clients, service account, groups) came with Phase 5b-2b, below; login follows in Phase 5c.
 - **Kanidm client library** (Phase 5b-1, [ADR-001](docs/adr/001-identity.md)), `atlas.kernel.identity.kanidm`:
   - REST calls to the bundled IdP, always verified against its internal CA: login for the built-in service accounts, service accounts and API tokens, groups, OAuth2 clients;
   - the admin unix socket (`RecoverAccount`, `DisableAccount`);
@@ -49,6 +49,16 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - no service uses it yet: the IdP bootstrap (5b-2) is its first caller;
   - for the bootstrap (5b-2a), checked against the real IdP: redirect URLs with an app's own scheme (`app.immich:///oauth-callback`; `http://` is still refused), OAuth2 client settings (landing URL, strict redirects, PKCE, legacy crypto) in one idempotent call, deleting an API token, and groups and service accounts by UUID. An OAuth2 client is still addressed by name only: Kanidm answers a UUID there with `200 null`, a 404 or a silent no-op.
 - **Kanidm's admin socket on its own volume** (Phase 5b-2a): `server.toml` gains `adminbindpath`, and the socket lives on a new volume, `idp-admin`, that only uid 10002 can use. The IdP bootstrap (5b-2b) can then reach the socket without mounting Kanidm's database. Nothing uses the socket yet.
+- **The IdP bootstrap** (Phase 5b-2b, [ADR-001](docs/adr/001-identity.md)): the one-shot service `atlas-idp-bootstrap` and the command `atlas-admin idp-bootstrap`. On every `up`, after `idp` is healthy and before `atlas-api`, it sets Kanidm up for Atlas, idempotently ([SELF_HOSTING → The IdP bootstrap](docs/SELF_HOSTING.md#the-idp-bootstrap)):
+  - the groups `atlas_users`, `atlas_role_owner`, `atlas_role_admin`, `atlas_role_adult`, `atlas_role_child`, `atlas_role_guest` (and `immich_users` with Immich) and their credential policies (owner and admin: `mfa` and 8-hour sessions; adult: `mfa`; child and guest: `any`). `idm_all_persons` is lowered to `any` only after every role group carries its policy;
+  - the service account `atlas-console` with one API token, and Atlas's OIDC client `atlas` (landing URL = the OIDC callback and its only redirect URL, strict redirects, PKCE required, legacy crypto off);
+  - with the new setting `ATLAS_IMMICH_PUBLIC_URL`, Immich's client `immich` with exactly the three documented redirect URIs, whose secret you read with `sudo cat secrets/idp-clients/immich.env`;
+  - `secrets/atlas-idp/idp.env` (`ATLAS_OIDC_CLIENT_SECRET`, `ATLAS_IDP_ADMIN_TOKEN`), `groups.json` and `bootstrap.json`, all written atomically with their final mode, and loaded last through `ATLAS_ENV_FILES`. Nothing secret is ever set by hand, logged or printed;
+  - it runs as uid 10002 with no capabilities and a read-only root filesystem, on `idp-back` only, with Kanidm's admin socket volume mounted read-only: never the IdP's database, never the Docker socket;
+  - `idm_admin` is disabled again on every way out, including errors and SIGTERM, and on the fast path (a run with nothing to change, which resets no password and does not sign in);
+  - `atlas-admin idp-bootstrap --verify` (a full run that repairs drift, and removes scope maps nobody here set from the two clients) and `--rotate-console-token`;
+  - `atlas-api` does not start until a bootstrap has succeeded, every time: each run writes `complete: false` into `bootstrap.json` first and `complete: true` last, and `atlas-api` refuses to start on anything else (the new setting `ATLAS_IDP_BOOTSTRAP_RECORD`). Compose can't do this alone: a dependency declared optional only warns when it fails;
+  - settings `ATLAS_IMMICH_PUBLIC_URL`, `ATLAS_IDP_ADMIN_TOKEN` (optional until the console uses it) and `ATLAS_IDP_BOOTSTRAP_RECORD`; the client's removal of one OAuth2 scope map and of a redirect URL of any scheme (to remove an `http://` one set by hand).
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -58,6 +68,8 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
 - Milestones are named Foundation, First modules and Household apps instead of v1/v2/v3, and releases follow SemVer.
 
 - `atlas-init` now creates `secrets/idp-trust/` itself (root, `0755`) in both modes, because atlas-proxy always mounts it. Before, in bring-your-own OIDC mode the directory appeared only as a side effect of that mount. Without the bundled IdP it stays empty.
+- `atlas-init` now also creates `secrets/atlas-idp/` (root, group 10001, `0750`) in both modes, because `atlas-api` always mounts it. With the bundled IdP, `atlas-idp-init` gives it to uid 10002 (`2750`) and creates `secrets/idp-clients/` (`0700`). In bring-your-own OIDC mode `atlas-idp/` stays empty.
+- With the bundled IdP, `ATLAS_ENV_FILES` for `atlas-api` ends with `/run/secrets/atlas-idp/idp.env`, so its client secret wins over one in `app.env`.
 - `httpx` is now a runtime dependency of the Atlas image (the Kanidm client uses it). It was a development dependency before.
 - The check that the pinned Kanidm digest still matches its tag moved out of the `compose` CI job into its own workflow (`kanidm-digest`). It runs when `deploy/docker-compose.yml` changes, weekly and on demand, retries registry errors, and is not a required check, so a Docker Hub rate limit no longer fails unrelated pull requests.
 
@@ -93,7 +105,16 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **New settings** in `deploy/.env` (see `.env.example`): `COMPOSE_PROFILES=bundled-idp`, `ATLAS_IDP_PUBLIC_URL` (its own HTTPS hostname, different from `ATLAS_PUBLIC_URL`), `ATLAS_IDP_VOLUME`, `ATLAS_IDP_FRONT_SUBNET` (default `10.249.73.0/28`; change it if it collides with one of your networks), `ATLAS_IDP_BACKUP_SCHEDULE`, `ATLAS_IDP_BACKUP_VERSIONS` and `ATLAS_RATE_LIMIT_IDP_AUTH`. To stay on bring-your-own OIDC, leave out `bundled-idp` and `ATLAS_IDP_PUBLIC_URL`;
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
-  - `ATLAS_OIDC_CLIENT_SECRET` must still be set by hand until Phase 5b.
+  - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
+- **If you run a pre-release checkout from before the IdP bootstrap** (5b-2b), the bundled IdP is now configured for you. Run `./install.sh` as usual (or `docker compose up -d`):
+  - **A new one-shot service, `atlas-idp-bootstrap`,** creates Atlas's OIDC client, the console's service account, the role groups and their credential policies, and writes `secrets/atlas-idp/idp.env`, `groups.json` and `bootstrap.json`. **`atlas-api` does not start until it has succeeded**, on this and on every later start. If it fails, read `docker compose logs atlas-idp-bootstrap`, fix the cause and run `docker compose up -d` again.
+  - **New files and directories**, created by `atlas-init` and `atlas-idp-init`: `secrets/atlas-idp/` (also in bring-your-own mode, empty there) and `secrets/idp-clients/`. Back them up with the rest of `secrets/`.
+  - **If you set `ATLAS_OIDC_CLIENT_SECRET` by hand** in `secrets/atlas/app.env`, the generated value now takes its place (`idp.env` is loaded last). You may delete your line.
+  - **A client named `atlas` or `immich` that you created by hand in Kanidm is adopted:** the bootstrap enforces its settings (landing URL, strict redirects, PKCE, no legacy crypto), **removes every redirect URI other than the documented ones**, and reads its secret. Scope maps it did not set are removed only by `atlas-admin idp-bootstrap --verify`. Any other client is left alone. If a hand-made client relied on other redirect URIs, they are gone after the bootstrap, and adding them again is undone by its next run.
+  - **Children and guests sign in with a password of at least 15 characters** (Kanidm's rule for an account without a second factor; a passphrase or a passkey satisfies it). Owners, admins and adults need a second factor.
+  - **To connect Immich**, set `ATLAS_IMMICH_PUBLIC_URL` (Immich's own HTTPS origin, no path) in `deploy/.env`, run `docker compose up -d`, and read its client secret with `sudo cat secrets/idp-clients/immich.env`. This replaces the unimplemented `idp-add-client` command that earlier documentation named.
+  - **To rotate the console's token:** `docker compose run --rm atlas-idp-bootstrap atlas-admin idp-bootstrap --rotate-console-token`, then `docker compose restart atlas-api`. Kanidm keeps accepting the old token for up to five minutes.
+  - **Bring-your-own OIDC: nothing changes.** No bootstrap runs, `atlas-api` skips the check, and `ATLAS_OIDC_CLIENT_SECRET` stays in `app.env` as before.
 - **If you run a pre-release checkout from before the admin-socket volume** (5b-2a), the bundled IdP's admin socket moves to a new volume. Run `./install.sh` as usual (or `docker compose up -d`); in `deploy/`:
 
   ```bash

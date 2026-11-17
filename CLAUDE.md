@@ -10,7 +10,8 @@ an admin console, and a module registry. Pre-1.0. Status per phase: `README.md` 
 **Spike S is done** (ADR-001 outcome (b): Kanidm is the bundled IdP, with the workarounds recorded there).
 **Phase 5a is done** (bundled IdP service, volume, networks, vhost, internal CA, backup).
 **Phase 5b-1 is done** (the Kanidm client library, `atlas/kernel/identity/kanidm/`).
-**Next: Phase 5b-2**: the IdP bootstrap (the work marked `TODO(phase-5b)`), then the RP, sessions and adapters.
+**Phase 5b-2 is done** (the admin socket's own volume; the IdP bootstrap service `atlas-idp-bootstrap`, with `atlas-api` gated on its completion record).
+**Next: Phase 5c**: the RP (login, sessions) and the `IdentityAdmin` adapters.
 Follow ADR-001 → "Workarounds and design consequences".
 
 ## Read first

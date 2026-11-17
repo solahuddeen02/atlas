@@ -155,9 +155,9 @@ The file is named `PLAN-v1` because Foundation ships as release **1.0.0** (SemVe
 - `tests/cli/test_init.py`: generation, modes, idempotence, no-overwrite.
 - Container test: a placeholder key means exit ≠ 0.
 
-**Deferred until Spike S** (each one was marked with a spike-s TODO in the code). **Delivered in Phase 5a**, except `ATLAS_IDP_ADMIN_TOKEN` and the generated `ATLAS_OIDC_CLIENT_SECRET`, which need the IdP bootstrap and are marked `TODO(phase-5b)`:
+**Deferred until Spike S** (each one was marked with a spike-s TODO in the code). **Delivered in Phase 5a**, except `ATLAS_IDP_ADMIN_TOKEN` and the generated `ATLAS_OIDC_CLIENT_SECRET`, which need the IdP bootstrap and were **delivered in Phase 5b-2b**:
 - `atlas-init` generating the `idp/` directory: the internal CA, its key, and the server certificate and key.
-- `ATLAS_IDP_ADMIN_TOKEN`, and `ATLAS_OIDC_CLIENT_SECRET` for the bundled IdP. Both are written after the IdP bootstrap, which may issue the client secret itself.
+- `ATLAS_IDP_ADMIN_TOKEN`, and `ATLAS_OIDC_CLIENT_SECRET` for the bundled IdP. Both are written by the IdP bootstrap into `atlas-idp/idp.env` (Kanidm issues the client secret and the token), not by `init`; `app.env` stays append-only.
 - `ATLAS_IDP_PUBLIC_URL`, the default `ATLAS_OIDC_ISSUER` derived from it, and `ATLAS_IDENTITY_ADMIN=kanidm`.
 - The bundled-IdP lines in `deploy/.env.example` (`ATLAS_IDP_PUBLIC_URL`, `COMPOSE_PROFILES=bundled-idp`, `ATLAS_IDP_VOLUME`).
 
@@ -247,7 +247,7 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 
 **Delivery:** the first PR is **5a: bundled IdP service, volume, vhost, internal CA, backup**. It delivers everything Phases 2–4 deferred until Spike S (the spike-s TODOs). The RP, sessions and the adapters follow.
 
-> **Progress: 5a done.** No spike-s TODO marker remains; the IdP bootstrap work left is marked `TODO(phase-5b)`.
+> **Progress: 5a, 5b-0, 5b-1 and 5b-2 done.** No spike-s or `phase-5b` TODO marker remains. Next: 5c, the RP, sessions and adapters.
 > - **Delivered** (see [SELF_HOSTING → bundled identity provider](SELF_HOSTING.md#the-bundled-identity-provider)):
 >   - `idp` (kanidm/server 1.12.0 by digest; uid 10002; read-only; healthcheck with `-v`) and `atlas-idp-init` under the `bundled-idp` profile;
 >   - the external volume `${ATLAS_IDP_VOLUME:-atlas_idp}`, created by `install.sh` with that profile;
@@ -274,7 +274,14 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 >     - adding a group member that doesn't exist is a `500`, and a malformed body is a `422` like a weak password;
 >     - `RecoverAccount` sets a new password on every call and re-enables a disabled account.
 >   - The socket is reachable by root and by the idp user (uid 10002) only, through file permissions.
-> - **5b next (5b-2):** the IdP bootstrap (Atlas OAuth2 client and its generated secret, console service account and `ATLAS_IDP_ADMIN_TOKEN`, role groups and policies), then the RP, sessions and the `IdentityAdmin` adapters.
+> - **5b-2a done: client additions and the admin socket's own volume** (`idp-admin`, `adminbindpath`): custom-scheme redirect URLs, OAuth2 client settings in one call, deleting an API token, UUIDs as ids (not for OAuth2 clients, which Kanidm resolves by name only).
+> - **5b-2b done: the IdP bootstrap** (`atlas-idp-bootstrap`, `atlas-admin idp-bootstrap`; [SELF_HOSTING → The IdP bootstrap](SELF_HOSTING.md#the-idp-bootstrap)).
+>   - Creates the role groups and their policies, `idm_all_persons` → `any` only afterwards, the console's service account and its one API token, Atlas's OIDC client (landing URL = callback, strict, PKCE, no legacy crypto) and, with `ATLAS_IMMICH_PUBLIC_URL`, Immich's client with exactly three redirect URIs. Writes `secrets/atlas-idp/` (`idp.env`, `groups.json`, `bootstrap.json`) and `secrets/idp-clients/immich.env`.
+>   - uid 10002, no capabilities, read-only, `idp-back` only. `idm_admin` is disabled again on every exit, errors and SIGTERM included, and on the fast path.
+>   - `--verify` and `--rotate-console-token`. Kanidm keeps a deleted token for up to 300 seconds; documented, not waited for in CI.
+>   - **`atlas-api` is gated on the bootstrap by a completion record, not by Compose.** Checked on Compose v5.6.1: a dependency declared `required: false` (so BYO still starts) only warns when it fails, and the dependent starts anyway, with whatever files an earlier run left. So every run writes `complete: false` first and `complete: true` last, and `atlas-api` (bundled IdP) refuses to start on anything else. After a fix, the first `up -d` may report `atlas-api` unhealthy while it restarts; a second starts the proxy.
+>   - Probed against the real Kanidm: the scope-map `DELETE` (200, idempotent, removes only that group's map); a created client's landing URL is not yet a redirect URL (the bootstrap adds it); the 15-character password minimum for accounts without a second factor.
+> - **5c next:** the RP, sessions and the `IdentityAdmin` adapters.
 
 **Work:**
 - OIDC RP using the spike's validated parameters ([ADR-001 → Spike results](adr/001-identity.md#spike-results)):
@@ -303,7 +310,7 @@ Roles are created by a separate `atlas-db-init` step (see ADR-005 §3).
 - Unknown `(issuer, sub)` → reject unless completing an **account link** (BYO).
 - Sessions with a `__Host-` cookie, CSRF synchronizer token, rotation, per-role lifetimes (configurable).
 - `IdentityAdmin` implementations: `kanidm`, `manual` (BYO) and `fake`.
-- `atlas-init` IdP bootstrap (bundled): Atlas OAuth2 client, console service account, role groups and credential policies.
+- ~~`atlas-init` IdP bootstrap (bundled): Atlas OAuth2 client, console service account, role groups and credential policies.~~ Delivered in 5b-2b as `atlas-admin idp-bootstrap` (its own service, not `atlas-init`: it needs Kanidm's admin socket and runs as the IdP's user).
 - `atlas-admin bootstrap-owner`: creates the first owner and prints a one-time enrolment link. In BYO mode it prints a link code.
 - `atlas-admin break-glass`.
 - App-layer rate limits.

@@ -29,8 +29,9 @@ Module boundaries are enforced in code (import contracts, the SDK and per-module
 | `atlas-init` | Generates missing secrets (ADR-004). Idempotent | — | One-shot, every `up` |
 | `atlas-db-init` | Creates the DB roles, database and schema (ADR-005) | — | One-shot, every `up` |
 | `postgres` | PostgreSQL 17, data in an **external** named volume (ADR-005) | — | Long-running |
-| `atlas-idp-init` | Bundled IdP (profile `bundled-idp`): writes the internal CA, the idp TLS key/certificate and Kanidm's `server.toml`, and prepares the idp volume and backup dirs. Root, no network. The IdP bootstrap (OAuth2 clients, service account, groups) follows in Phase 5b | — | One-shot, every `up` |
+| `atlas-idp-init` | Bundled IdP (profile `bundled-idp`): writes the internal CA, the idp TLS key/certificate and Kanidm's `server.toml`, and prepares the idp volumes and backup dirs. Root, no network | — | One-shot, every `up` |
 | `idp` | Bundled Kanidm 1.12, pinned by digest. Profile `bundled-idp`, on by default. uid 10002, read-only root filesystem, internal TLS only, online backups into `ATLAS_BACKUP_DIR/idp-online/` | — | Long-running |
+| `atlas-idp-bootstrap` | Bundled IdP: `atlas-admin idp-bootstrap` creates the OAuth2 clients, the console's service account and the role groups, and writes `secrets/atlas-idp/` for `atlas-api`. uid 10002, no capabilities, read-only, `idp-back` only; mounts Kanidm's admin socket volume read-only. `atlas-api` refuses to start unless its last run completed | — | One-shot, every `up` |
 | `atlas-migrate` | `atlas-admin migrate`: lock → pre-migration dump → `alembic upgrade heads` → seed | — | One-shot, every `up` |
 | `atlas-api` | FastAPI kernel + enabled modules, as `atlas_app` (DML only) | — | Long-running |
 | `atlas-proxy` | nginx: serves the SPA, proxies `/api` and `/health`, re-encrypts to `idp`, applies security headers and rate limits | **`${ATLAS_BIND_ADDRESS:-127.0.0.1}:${ATLAS_HTTP_PORT:-8080}`**, the only one | Long-running |
@@ -57,7 +58,7 @@ Module boundaries are enforced in code (import contracts, the SDK and per-module
 |---|---|---|
 | `default` | every service except `idp` | atlas-proxy's only route and gateway; the trusted-peer rules of ADR-003 §1 are computed on it |
 | `idp-front` | atlas-proxy, idp | `internal: true`, subnet `ATLAS_IDP_FRONT_SUBNET`. The only network Kanidm trusts `X-Forwarded-For` from; atlas-proxy overwrites that header with the verified client address. The host has no address on it (`inhibit_ipv4`), so nothing on the host can connect from the trusted subnet |
-| `idp-back` | atlas-api, idp | `internal: true`. The OIDC back-channel (Phase 5b). Not trusted by Kanidm |
+| `idp-back` | atlas-api, atlas-idp-bootstrap, idp | `internal: true`. The back-channel to Kanidm. Not trusted by Kanidm |
 
 Kanidm's configuration is only the `server.toml` that `atlas-idp-init` renders: the compose file sets no `KANIDM_*` variables, because they would override it ([SELF_HOSTING → bundled identity provider](SELF_HOSTING.md#the-bundled-identity-provider)).
 
@@ -239,6 +240,7 @@ The event bus is in-process with a transactional outbox, so it's durable without
 |---|---|---|
 | Postgres data | External volume `${ATLAS_PGDATA_VOLUME:-atlas_pgdata}` | ✓ (external) |
 | Bundled IdP data | External volume `${ATLAS_IDP_VOLUME:-atlas_idp}` | ✓ (external) |
+| Kanidm's admin socket | Project volume `idp-admin` (`<project>_idp-admin`): the socket only, no data, no backup; mounted read-write by `idp` and read-only by `atlas-idp-bootstrap` | ✗ (recreated empty; never run `down -v` anyway) |
 | Secrets | Host dir `${ATLAS_SECRETS_DIR:-./secrets}` | ✓ (host path) |
 | Backups | Host dir `${ATLAS_BACKUP_DIR:-./backups}` | ✓ (host path) |
 | Blob storage (First modules) | External volume `${ATLAS_FILES_VOLUME:-atlas_files}`, or S3-compatible storage | ✓ |

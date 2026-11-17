@@ -67,6 +67,14 @@ docker build -t atlas:local .
 RUN_COMPOSE_TESTS=1 uv run pytest tests/compose -v
 ```
 
+**On WSL2 with Docker Desktop**, work in the Linux file system (for example `~/atlas`), not under `/mnt/`, and mind the ports. The test harness asks the Linux kernel for free ports, from `net.ipv4.ip_local_port_range`, and Docker Desktop then publishes them through Windows. Windows reserves part of its own dynamic port range for itself (`netsh int ipv4 show excludedportrange protocol=tcp` lists what is reserved), and Docker Desktop can't publish a port inside a reserved range: a test then fails at random with `ports are not available` and `/forwards/expose returned unexpected status: 500`. Keep the Linux range below the start of Windows' dynamic range (49152 by default), for example:
+
+```bash
+sudo sysctl -w net.ipv4.ip_local_port_range="32768 49151"
+```
+
+Put the same line in a file under `/etc/sysctl.d/` to keep it after a restart. CI runs on Linux and is not affected.
+
 ## Checks CI runs
 
 Every job in `.github/workflows/ci.yml` must be green before a PR merges. The one check outside that file, `kanidm-digest`, is listed last and is not required.
@@ -79,7 +87,7 @@ Every job in `.github/workflows/ci.yml` must be green before a PR merges. The on
 | `gitleaks` | No secrets in the commits being pushed. A weekly workflow (`gitleaks-weekly`) scans the full history | `gitleaks git --redact .` |
 | `audit` | No known vulnerabilities in `uv.lock` or the frontend's runtime deps (`legacy/requirements.txt` is reported, not enforced) | `uv export --all-groups --no-emit-project --format requirements-txt -o /tmp/req.txt && uv run pip-audit --strict --require-hashes --disable-pip -r /tmp/req.txt`, `cd legacy/frontend && npm audit --omit=dev` |
 | `image` | The image builds for linux/amd64 and linux/arm64; it runs as non-root, has the PG 17 client, and contains no source tree, VCS data, tests, env files or `uv` | `docker buildx build --platform linux/amd64,linux/arm64 .` |
-| `compose` | The compose stack comes up healthy; the proxy (single published port, unknown `Host` dropped, real-IP trust, headers, rate and body limits, refusal on bad settings); `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership; the bundled IdP (healthy with verified TLS, proxy → idp over verified TLS, the real client IP at Kanidm, no route from the host to Kanidm on `idp-front`, Kanidm backup → restore); `idp-trust/` root-owned and empty in BYO mode; the Kanidm client (admin socket and REST) against the real IdP | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
+| `compose` | The compose stack comes up healthy; the proxy (single published port, unknown `Host` dropped, real-IP trust, headers, rate and body limits, refusal on bad settings); `down -v` keeps data; a failing migration blocks the API; a missing volume fails loudly; backup → restore into a scratch stack; secret ownership; the bundled IdP (healthy with verified TLS, proxy → idp over verified TLS, the real client IP at Kanidm, no route from the host to Kanidm on `idp-front`, Kanidm backup → restore); `idp-trust/` root-owned and empty in BYO mode; the Kanidm client (admin socket and REST) against the real IdP; the IdP bootstrap (idempotent, `--verify`, rotation, a failing run blocks `atlas-api` the first time and every later time, `idm_admin` disabled again) | `docker build -t atlas:local . && RUN_COMPOSE_TESTS=1 uv run pytest tests/compose` |
 | `compose-lint` | No literal secret values in any compose file's `environment:` ([ADR-004 §3](docs/adr/004-config-and-secrets.md)) | `uv run python scripts/ci/lint_compose_secrets.py` |
 | `kanidm-digest` (**not required**; `.github/workflows/kanidm-digest.yml`) | The Kanidm digest pinned in `deploy/docker-compose.yml` is the one the `kanidm/server:1.12.0` tag points to. Runs when that compose file or the workflow changes, every Monday, and on demand (`gh workflow run kanidm-digest.yml`). Registry errors are retried with backoff. It logs in to Docker Hub only if the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` exist; forks have none and look the tag up anonymously | `docker buildx imagetools inspect kanidm/server:1.12.0 --format '{{json .Manifest}}'`, then compare `.digest` with the pin |
 
