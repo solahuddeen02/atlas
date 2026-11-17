@@ -135,7 +135,10 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | `ATLAS_OIDC_INTERNAL_URL` | bundled: `https://idp:8443` | Optional back-channel base URL for discovery, token and JWKS calls. `iss` is still validated against the public issuer |
 | `ATLAS_OIDC_CA_FILE` | bundled: the internal CA under the secrets dir | CA bundle for verifying `ATLAS_OIDC_INTERNAL_URL` |
 | `ATLAS_IDENTITY_ADMIN` | bundled: `kanidm`; BYO: `manual` | How the console manages identities. `kanidm` creates/resets people in the IdP. `manual` uses one-time link codes, and you manage credentials in your IdP |
-| `ATLAS_IDP_ADMIN_TOKEN` | bundled: *written by the IdP bootstrap* to `secrets/atlas-idp/idp.env` | Service-account token the console uses to call the IdP admin API. Optional until the console that uses it exists. [Rotate it](#rotating-the-console-token) with `--rotate-console-token` |
+| `ATLAS_IDP_ADMIN_TOKEN` | bundled: *written by the IdP bootstrap* to `secrets/atlas-idp/idp.env` | Service-account token the console uses to call the IdP admin API. **Required with the bundled IdP** (`atlas-api` refuses to start without it; an install that has run the bootstrap already has it). Not used with BYO OIDC. [Rotate it](#rotating-the-console-token) with `--rotate-console-token` |
+| `ATLAS_IDP_INTERNAL_URL` | bundled: `https://idp:8443` | Where `atlas-api` reaches the bundled Kanidm on the Docker network. Every call is verified against `ATLAS_IDP_CA_FILE`. Links that people open always use `ATLAS_IDP_PUBLIC_URL`, never this. Rarely changed |
+| `ATLAS_IDP_CA_FILE` | `/run/secrets/idp-trust/ca.pem` | The IdP's internal CA certificate (public), mounted read-only from `secrets/idp-trust/`. Don't change it |
+| `ATLAS_IDP_GROUPS_FILE` | `/run/secrets/atlas-idp/groups.json` | The group UUIDs the bootstrap wrote. Atlas finds its role groups by UUID from this file. Don't change it |
 | `ATLAS_IDP_BOOTSTRAP_RECORD` | `/run/secrets/atlas-idp/bootstrap.json` | Bundled IdP: the bootstrap's completion record. `atlas-api` refuses to start unless it says the last run completed ([details](#if-the-bootstrap-fails)). Don't change it |
 | `ATLAS_STEP_UP_MAX_AGE` | `300` | Seconds a re-authentication stays valid for admin actions |
 | `ATLAS_SESSION_IDLE_<ROLE>` / `ATLAS_SESSION_MAX_<ROLE>` | owner/admin `12h`/`7d`; adult and child `14d`/`30d`; guest `1d`/until expiry | Session idle and absolute lifetimes per role (`OWNER`, `ADMIN`, `ADULT`, `CHILD`, `GUEST`) |
@@ -282,7 +285,7 @@ This covers the host's own network stack. Anyone who can run Docker commands on 
 |---|---|---|---|
 | `secrets/idp-ca/ca.key`, `ca.pem` | The internal CA. Never rotated automatically | **no running service** | root, `0600` (directory `0700`) |
 | `secrets/idp/server.key`, `chain.pem`, `server.toml` | Kanidm's TLS key, its certificate + the CA certificate, its config | `idp`, read-only | root, group 10002, `0440` (directory `0750`) |
-| `secrets/idp-trust/ca.pem` | The CA certificate only (public). The directory also exists, empty, in BYO mode | atlas-proxy, atlas-idp-bootstrap | root, `0644` (directory `0755`) |
+| `secrets/idp-trust/ca.pem` | The CA certificate only (public). The directory also exists, empty, in BYO mode | atlas-proxy, atlas-api, atlas-idp-bootstrap | root, `0644` (directory `0755`) |
 | `secrets/atlas-idp/idp.env` | `ATLAS_OIDC_CLIENT_SECRET` and `ATLAS_IDP_ADMIN_TOKEN`. **Secret** | atlas-idp-bootstrap (writes), `atlas-api` (read-only) | uid 10002, group 10001, `0640` |
 | `secrets/atlas-idp/groups.json` | Each Atlas group's name and Kanidm UUID. Not secret | the same | the same |
 | `secrets/atlas-idp/bootstrap.json` | The bootstrap's [completion record](#if-the-bootstrap-fails). Not secret | the same | the same |
@@ -346,6 +349,17 @@ It gets this through Kanidm's `entry_managed_by`, not through `idm_group_admins`
 **Upgrading from an earlier pre-release:** the next `docker compose up -d` runs one full bootstrap (a few seconds) that sets the managers, checks each one, and only then removes the console from `idm_group_admins`. `atlas-api` waits for it as usual. If a run stops in between, the console keeps its old rights until the next run finishes the job. Nothing to change by hand.
 
 **Disabling a person.** Disabling an account in Kanidm (it sets `account_expire`) stops their existing Kanidm sessions and new logins, but **clearing it makes the old sessions valid again** until they reach their own lifetime (up to 24 hours, 8 hours for owners and admins). Changing the person's credential ends them for good. So when you disable someone because the account may be compromised, also issue a reset link, so that they set a new password and second factor: the old sessions then stay refused. A reset link cannot be revoked, and issuing a new one does not cancel an older one: each stays valid until it is used or expires, so keep the lifetime short.
+
+#### Reset links
+
+A reset link is what a person opens to set their password and second factor (or a passkey) without any mail. The console shows it once, as a link and a QR code, for in-person hand-over.
+
+- **It is a secret.** Anyone who has it can set that person's credentials. Atlas never logs it and shows nothing of it in an error; treat a printed one like a password.
+- **The host is `ATLAS_IDP_PUBLIC_URL`**, in the form `https://id.example.com/ui/reset?token=…`, never an internal address.
+- **It lives 15 minutes by default, and 5 minutes to 1 hour at most.** The console and the CLI refuse anything else instead of rounding it. A person only has to open the link inside that time: what they are doing after they opened it (setting a password, scanning a code) may take longer.
+- **It cannot be revoked, and a new link does not cancel an older one.** Kanidm has no call for either (checked on 1.12.0). Each link works until it is used or expires. Deleting the person ends every link they have. This is why the lifetime is short: if a link may have been seen by someone else, issue a new one only after the old one has expired, or delete and recreate the person.
+- **A disabled person gets no link.** Enable them first.
+- **Kanidm's own log records the link when it is opened**, because the request line holds the address (`docker compose logs idp`). No Atlas service logs it, and a test checks every service's log, but that one line is Kanidm's. So whoever can read `docker compose logs idp` can read the links that were opened in the last hour: that is the host's administrator, who could issue links anyway. Keep the logs of the host as private as the secrets directory.
 
 #### If the bootstrap fails
 

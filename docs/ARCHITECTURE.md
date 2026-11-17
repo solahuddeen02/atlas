@@ -65,7 +65,7 @@ Kanidm's configuration is only the `server.toml` that `atlas-idp-init` renders: 
 **With bring-your-own OIDC** ([ADR-001](adr/001-identity.md)):
 - the `bundled-idp` profile is off, so there's no `idp` service and no IdP vhost;
 - `atlas-api` talks to the external issuer;
-- `atlas-idp-init` doesn't run, so there's no internal CA either. atlas-proxy still joins the (unused) `idp-front` network and mounts the empty `secrets/idp-trust/`, which `atlas-init` creates.
+- `atlas-idp-init` doesn't run, so there's no internal CA either. atlas-proxy still joins the (unused) `idp-front` network, and atlas-proxy and atlas-api mount the empty `secrets/idp-trust/`, which `atlas-init` creates.
 
 ## 2. Code layout and module boundaries
 

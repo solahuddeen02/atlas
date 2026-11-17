@@ -12,7 +12,7 @@ Atlas follows [Semantic Versioning](https://semver.org/) (see [README → Versio
 
 ## [Unreleased]
 
-There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0 to 5b-3a: the Kanidm client library, the IdP bootstrap and the console's least privilege).
+There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase 5a (the bundled identity provider's infrastructure) and its follow-ups (5b-0 to 5b-3b: the Kanidm client library, the IdP bootstrap, the console's least privilege and the identity adapter).
 
 ### Added
 
@@ -65,6 +65,17 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - a compose test pins what the token can do and what it must be refused, against the real Kanidm, with an `idm_admin` snapshot around every refused write;
   - the Kanidm client gains `remove_group_members`;
   - `atlas-api` runs as one process on purpose, with a test that fails if more are configured (role changes need a cross-process lock first).
+- **The identity adapter** (Phase 5b-3b, [ADR-001](docs/adr/001-identity.md)): `IdentityAdmin`, the interface the admin console will use to manage the people of a household, with the `kanidm` adapter (the bundled IdP) and the `fake` adapter (for tests). Nothing calls it yet: the console is Phase 8.
+  - `create_person`, `get_person`, `set_role`, `set_app_access`, `issue_credential_reset`, `disable`, `enable`, `delete` and `check`. A person is addressed by the IdP's id (the OIDC `sub`), never by username;
+  - **every person is in exactly one role group**, found by UUID from `groups.json` (a group that only has the same name never counts). A person in none or several is refused by every method but `set_role(..., repair=True)` and `delete`;
+  - `set_role` adds the new group before it removes the old one, serialised per person, undone once on a failure and otherwise a person that is refused until repaired;
+  - **reset links** use `ATLAS_IDP_PUBLIC_URL`, show nothing of their token in a log, an error or a `repr`, live 15 minutes by default and 5 minutes to 1 hour at most (not clamped), and are refused for a disabled person. A link cannot be revoked and a new one does not cancel an older one ([SELF_HOSTING → Reset links](docs/SELF_HOSTING.md#reset-links));
+  - `check()` reports a missing group, a refused token and any member of the six groups that is not a person (name and UUID);
+  - usernames are 2 to 32 lowercase letters, digits, `_` and `-` (reserved names refused); display names take Thai and any other script;
+  - the Kanidm client gains the person calls (the person's attributes are allowlisted, no credential among them);
+  - settings `ATLAS_IDP_INTERNAL_URL`, `ATLAS_IDP_CA_FILE` and `ATLAS_IDP_GROUPS_FILE` (defaults match the compose file); `ATLAS_IDP_ADMIN_TOKEN` is now **required** with the bundled IdP;
+  - `atlas-api` mounts `secrets/idp-trust/` (the CA certificate, public) read-only;
+  - tests: one contract suite run against both adapters, and a compose test of a whole lifecycle against the real Kanidm that also searches every service's log for each secret it handled.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
 
@@ -112,6 +123,12 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
+- **If you run a pre-release checkout from before the identity adapter** (5b-3b), run `docker compose up -d` as usual:
+  - **`atlas-api` is recreated** with one new read-only mount, `secrets/idp-trust/` (the IdP's public CA certificate). The directory already exists; nothing to create.
+  - **`ATLAS_IDP_ADMIN_TOKEN` is now required** with the bundled IdP. An install that has run the IdP bootstrap already has it in `secrets/atlas-idp/idp.env`; nothing to do. Without it `atlas-api` refuses to start and says which variable.
+  - **New optional settings** with defaults that match the compose file: `ATLAS_IDP_INTERNAL_URL`, `ATLAS_IDP_CA_FILE`, `ATLAS_IDP_GROUPS_FILE`. Leave them alone.
+  - **Bring-your-own OIDC: nothing changes.**
+  - **Reset links** (when the console exists): short-lived, not revocable, and Kanidm's own log records one when it is opened ([SELF_HOSTING](docs/SELF_HOSTING.md#reset-links)).
 - **If you run a pre-release checkout from before the console's least privilege** (5b-3a), run `docker compose up -d` as usual:
   - **The IdP bootstrap runs once more** (a few seconds; its version is now 2) and `atlas-api` waits for it. It makes the console's service account the manager of the five role groups and `immich_users`, checks each one, and only then removes the account from `idm_group_admins`. If it stops in between, the next `up` finishes the job.
   - **Nothing to change by hand**, no new setting and no new file.
