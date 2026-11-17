@@ -110,6 +110,41 @@ def test_bundled_config(make_stack: MakeStack) -> None:
     # Kanidm's config comes only from server.toml (ADR-001): no KANIDM_* anywhere.
     assert "KANIDM_" not in stack.compose("config").stdout
 
+    # The IdP bootstrap (5b-2b): idp user, nothing added, idp-back only, nothing of
+    # Kanidm's but its admin socket (read-only), never the Docker socket.
+    assert "atlas-idp-bootstrap" in services
+    bootstrap = services["atlas-idp-bootstrap"]
+    assert bootstrap["user"] == "10002:10002"
+    assert bootstrap["read_only"] is True
+    assert bootstrap["cap_drop"] == ["ALL"] and "cap_add" not in bootstrap
+    assert bootstrap["security_opt"] == ["no-new-privileges:true"]
+    assert set(bootstrap["networks"]) == {"idp-back"}
+    assert "ports" not in bootstrap and "privileged" not in bootstrap
+    assert bootstrap["depends_on"]["idp"]["condition"] == "service_healthy"
+    by_target = {v["target"]: v for v in bootstrap["volumes"]}
+    assert {t: v["source"] for t, v in by_target.items()} == {
+        # Kanidm's admin socket volume, not its database (idp-data); the Docker socket never.
+        "/run/atlas-idp-admin": "idp-admin",
+        "/run/secrets/idp-trust": f"{stack.secrets_dir}/idp-trust",
+        "/run/secrets/atlas-idp": f"{stack.secrets_dir}/atlas-idp",
+        "/run/secrets/idp-clients": f"{stack.secrets_dir}/idp-clients",
+    }
+    assert by_target["/run/atlas-idp-admin"]["read_only"] is True
+    assert by_target["/run/secrets/idp-trust"]["read_only"] is True  # the CA certificate
+    # atlas-api waits for it (and still starts without it in BYO), and reads what it wrote,
+    # last, so that the generated client secret wins over one set by hand.
+    api = services["atlas-api"]
+    wait = api["depends_on"]["atlas-idp-bootstrap"]
+    assert wait == {"condition": "service_completed_successfully", "required": False}
+    assert api["environment"]["ATLAS_ENV_FILES"] == (
+        "/run/secrets/atlas/app.env,/run/secrets/atlas/connectors.env,"
+        "/run/secrets/atlas-idp/idp.env"
+    )
+    assert {v["target"]: v.get("read_only", False) for v in api["volumes"]} == {
+        "/run/secrets/atlas": True,
+        "/run/secrets/atlas-idp": True,
+    }
+
 
 def test_idp_healthy_and_proxied_over_verified_tls(make_stack: MakeStack) -> None:
     stack = make_stack(idp=True)  # the default (hourly) online-backup schedule
@@ -162,6 +197,11 @@ def test_idp_files_and_dirs_ownership(make_stack: MakeStack) -> None:
         "/secrets/idp/server.toml",
         "/secrets/idp-trust",
         "/secrets/idp-trust/ca.pem",
+        "/secrets/atlas-idp",
+        "/secrets/atlas-idp/idp.env",
+        "/secrets/atlas-idp/groups.json",
+        "/secrets/atlas-idp/bootstrap.json",
+        "/secrets/idp-clients",
         "/backups/idp-online",
         "/backups/idp-restore",
     ]
@@ -192,6 +232,12 @@ def test_idp_files_and_dirs_ownership(make_stack: MakeStack) -> None:
         "/secrets/idp/server.toml": [0, 10002, "0o440"],
         "/secrets/idp-trust": [0, 0, "0o755"],
         "/secrets/idp-trust/ca.pem": [0, 0, "0o644"],
+        # The IdP bootstrap's: its own user, and the atlas group (setgid) for what atlas-api reads.
+        "/secrets/atlas-idp": [10002, 10001, "0o2750"],
+        "/secrets/atlas-idp/idp.env": [10002, 10001, "0o640"],
+        "/secrets/atlas-idp/groups.json": [10002, 10001, "0o640"],
+        "/secrets/atlas-idp/bootstrap.json": [10002, 10001, "0o640"],
+        "/secrets/idp-clients": [10002, 10002, "0o700"],
         "/backups/idp-online": [10002, 10001, "0o2750"],
         "/backups/idp-restore": [10001, 10002, "0o2750"],
     }
