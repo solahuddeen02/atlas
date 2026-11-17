@@ -42,6 +42,10 @@ def make_settings() -> Callable[..., Settings]:
 
     def make(**overrides: Any) -> Settings:
         values: dict[str, Any] = {**VALID, **overrides}
+        # With the bundled IdP the console token is required (5b-3b): supply one unless the
+        # test says otherwise (ATLAS_IDP_ADMIN_TOKEN=None drops it).
+        if values.get("ATLAS_IDP_PUBLIC_URL") and "ATLAS_IDP_ADMIN_TOKEN" not in overrides:
+            values["ATLAS_IDP_ADMIN_TOKEN"] = "console-" * 5
         values = {k: v for k, v in values.items() if v is not None}
         return build_settings(_env_file=None, **values)
 

@@ -132,6 +132,10 @@ services:
       - ${ATLAS_SECRETS_DIR:-./secrets}/atlas:/run/secrets/atlas:ro
       # What the IdP bootstrap wrote for the API (empty with BYO OIDC).
       - ${ATLAS_SECRETS_DIR:-./secrets}/atlas-idp:/run/secrets/atlas-idp:ro
+      # The public certificate of the IdP's internal CA, so that the API's calls to Kanidm
+      # are verified (the `kanidm` IdentityAdmin adapter). Never the CA's private key,
+      # which is mounted into no running service. Empty with BYO OIDC.
+      - ${ATLAS_SECRETS_DIR:-./secrets}/idp-trust:/run/secrets/idp-trust:ro
     healthcheck:
       test:
         - CMD

@@ -143,7 +143,12 @@ def test_bundled_config(make_stack: MakeStack) -> None:
     assert {v["target"]: v.get("read_only", False) for v in api["volumes"]} == {
         "/run/secrets/atlas": True,
         "/run/secrets/atlas-idp": True,
+        # The IdP's public CA certificate, for the kanidm IdentityAdmin adapter (5b-3b).
+        "/run/secrets/idp-trust": True,
     }
+    assert {v["target"]: v["source"] for v in api["volumes"]}["/run/secrets/idp-trust"] == (
+        f"{stack.secrets_dir}/idp-trust"
+    )  # never the CA's private key directory (idp-ca)
 
 
 def test_idp_healthy_and_proxied_over_verified_tls(make_stack: MakeStack) -> None:

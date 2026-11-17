@@ -326,9 +326,23 @@ class Settings(DatabaseSettings):
         default=None, validation_alias="ATLAS_IDENTITY_ADMIN"
     )
     # The console's service-account token for the bundled IdP's admin API, written by
-    # the IdP bootstrap. Optional until the adapter that uses it exists (Phase 5c).
+    # the IdP bootstrap. Required with the bundled IdP (the `kanidm` IdentityAdmin adapter
+    # acts with it); BYO OIDC has none.
     idp_admin_token: SecretStr | None = Field(
         default=None, validation_alias="ATLAS_IDP_ADMIN_TOKEN"
+    )
+    # Where atlas-api reaches the bundled Kanidm (the docker network), the CA that signed
+    # its certificate, and the file the IdP bootstrap wrote with the group UUIDs. The
+    # defaults are where docker-compose.yml puts them.
+    idp_internal_url_setting: str | None = Field(
+        default=None, validation_alias="ATLAS_IDP_INTERNAL_URL"
+    )
+    idp_ca_file: Path = Field(
+        default=Path("/run/secrets/idp-trust/ca.pem"), validation_alias="ATLAS_IDP_CA_FILE"
+    )
+    idp_groups_file: Path = Field(
+        default=Path("/run/secrets/atlas-idp/groups.json"),
+        validation_alias="ATLAS_IDP_GROUPS_FILE",
     )
     # The IdP bootstrap's completion record. With the bundled IdP, `load_settings` refuses
     # to start the process unless it says the last run completed (see identity/record.py).
@@ -358,8 +372,29 @@ class Settings(DatabaseSettings):
             return None
         return _check_url(value, production=_is_production(info))
 
+    @field_validator("idp_internal_url_setting", mode="before")
+    @classmethod
+    def _validate_idp_internal_url(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        if not isinstance(value, str):
+            return value
+        parts = urlsplit(value.strip())
+        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+            raise ValueError("must be an https:// URL without a user name or password")
+        if parts.path not in ("", "/") or parts.query or parts.fragment:
+            raise ValueError("must be an origin with no path")
+        return f"https://{parts.netloc}"
+
     @model_validator(mode="after")
     def _check_identity(self) -> Settings:
+        if self.bundled_idp and (
+            self.idp_admin_token is None or not self.idp_admin_token.get_secret_value()
+        ):
+            raise ValueError(
+                "ATLAS_IDP_ADMIN_TOKEN: is required with the bundled IdP "
+                "(`atlas-admin idp-bootstrap` writes it into atlas-idp/idp.env)"
+            )
         if self.idp_public_url is not None and _host(self.idp_public_url) == _host(self.public_url):
             raise ValueError(
                 "ATLAS_IDP_PUBLIC_URL: must use a different host name than ATLAS_PUBLIC_URL "
@@ -379,6 +414,11 @@ class Settings(DatabaseSettings):
             return self.oidc_issuer_setting
         assert self.idp_public_url is not None  # guaranteed by _check_identity
         return f"{self.idp_public_url}/oauth2/openid/{self.oidc_client_id}"
+
+    @property
+    def idp_internal_url(self) -> str:
+        """The bundled Kanidm's address on the docker network (ATLAS_IDP_INTERNAL_URL)."""
+        return self.idp_internal_url_setting or "https://idp:8443"
 
     @property
     def identity_admin(self) -> Literal["kanidm", "manual"]:
