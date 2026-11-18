@@ -1,7 +1,8 @@
 """Compose acceptance tests for Phase 4: atlas-proxy (PLAN-v1; ADR-003).
 
 Run by the `compose` CI job (RUN_COMPOSE_TESTS=1). Each test builds its own
-throwaway stack; see tests/compose/stack.py.
+throwaway stack, except the read-only ones, which share the session's default stack
+(`shared_byo` in conftest.py); see tests/compose/stack.py.
 """
 
 import http.client
@@ -26,10 +27,8 @@ def log_entries_for(stack: Stack, uri: str) -> list[dict[str, object]]:
     return [e for e in stack.proxy_log() if e.get("uri") == uri]
 
 
-def test_health_ok_through_proxy(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_health_ok_through_proxy(shared_byo: Stack) -> None:
+    stack = shared_byo
     assert stack.get("/health") == (200, b'{"status":"ok"}')
     # The SELF_HOSTING check: `curl http://127.0.0.1:8080/health` sends Host: 127.0.0.1.
     assert stack.get("/health", host="127.0.0.1") == (200, b'{"status":"ok"}')
@@ -47,7 +46,7 @@ def test_single_published_port(make_stack: MakeStack) -> None:
     assert int(port["target"]) == 8080
 
 
-def test_bind_and_port_configurable(make_stack: MakeStack) -> None:
+def test_bind_and_port_configurable(make_stack: MakeStack, shared_byo: Stack) -> None:
     port = free_port()
     stack = make_stack(
         create_volume=False,
@@ -61,11 +60,8 @@ def test_bind_and_port_configurable(make_stack: MakeStack) -> None:
     assert published["host_ip"] == "0.0.0.0"
     assert str(published["published"]) == str(port)
 
-    # And live, on another loopback port than the default.
-    live = make_stack("live")
-    live.up()
-    live.wait_healthy()
-    assert live.get("/health") == (200, b'{"status":"ok"}')
+    # And live, on another loopback port than the default (the shared stack's own).
+    assert shared_byo.get("/health") == (200, b'{"status":"ok"}')
 
 
 def test_nonloopback_bind_requires_explicit_trusted_cidrs(make_stack: MakeStack) -> None:
@@ -93,10 +89,8 @@ def test_nonloopback_bind_with_explicit_cidrs_ignores_gateway(make_stack: MakeSt
     assert stack.request("/health/ready")[0] == 403  # the host is not a trusted peer
 
 
-def test_unknown_host_dropped(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_unknown_host_dropped(shared_byo: Stack) -> None:
+    stack = shared_byo
     for path in ("/", "/api/x", "/docs"):
         with pytest.raises((http.client.RemoteDisconnected, ConnectionResetError)):
             stack.request(path, host="evil.example.net")
@@ -104,21 +98,17 @@ def test_unknown_host_dropped(make_stack: MakeStack) -> None:
     assert stack.get("/health", host="evil.example.net") == (200, b'{"status":"ok"}')
 
 
-def test_real_ip_trusted_peer_header_used(make_stack: MakeStack) -> None:
+def test_real_ip_trusted_peer_header_used(shared_byo: Stack) -> None:
     # Loopback bind: the host's connections arrive from the gateway, which is trusted.
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+    stack = shared_byo
     stack.request("/api/real-ip-probe", headers={"X-Forwarded-For": SPOOFED})
     entries = log_entries_for(stack, "/api/real-ip-probe")
     assert entries and entries[-1]["client"] == SPOOFED
     assert entries[-1]["peer"] != SPOOFED
 
 
-def test_real_ip_untrusted_ignored(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_real_ip_untrusted_ignored(shared_byo: Stack) -> None:
+    stack = shared_byo
     stack.from_inside("/api/untrusted-probe", headers={"X-Forwarded-For": SPOOFED})
     entries = log_entries_for(stack, "/api/untrusted-probe")
     assert entries
@@ -126,10 +116,8 @@ def test_real_ip_untrusted_ignored(make_stack: MakeStack) -> None:
     assert entries[-1]["client"] == entries[-1]["peer"]
 
 
-def test_health_ready_trusted_only(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_health_ready_trusted_only(shared_byo: Stack) -> None:
+    stack = shared_byo
     assert stack.get("/health/ready") == (200, b'{"status":"ready"}')
     assert stack.from_inside("/health/ready") == 403
     # A trusted-looking forwarded address doesn't help an untrusted peer.
@@ -137,10 +125,8 @@ def test_health_ready_trusted_only(make_stack: MakeStack) -> None:
 
 
 @pytest.mark.parametrize("path", ["/", "/health", "/api/nothing-here"])
-def test_security_headers_present(make_stack: MakeStack, path: str) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_security_headers_present(shared_byo: Stack, path: str) -> None:
+    stack = shared_byo
     _, headers, _ = stack.request(path)
     assert headers["content-security-policy"].startswith("default-src 'self'")
     assert "frame-ancestors 'none'" in headers["content-security-policy"]
@@ -150,10 +136,8 @@ def test_security_headers_present(make_stack: MakeStack, path: str) -> None:
     assert headers["strict-transport-security"].startswith("max-age=")
 
 
-def test_docs_disabled_in_production(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_docs_disabled_in_production(shared_byo: Stack) -> None:
+    stack = shared_byo
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert stack.request(path)[0] == 404, path
 
@@ -199,8 +183,6 @@ def test_proxy_refuses_bad_config(make_stack: MakeStack) -> None:
     assert stack.port_unreachable()
 
 
-def test_proxy_host_is_the_public_url(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_proxy_host_is_the_public_url(shared_byo: Stack) -> None:
+    stack = shared_byo
     assert "serving " + PUBLIC_HOST in stack.logs("atlas-proxy")

@@ -145,6 +145,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+      # While starting, probe every second (Docker Engine 25+), so the stack is up as soon as
+      # the service is, not up to one interval later. Failures in start_period don't count.
+      start_period: 30s
+      start_interval: 1s
     depends_on:
       atlas-migrate:
         condition: service_completed_successfully
@@ -317,6 +321,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+      start_period: 30s
+      start_interval: 1s
     depends_on:
       atlas-api:
         condition: service_healthy
