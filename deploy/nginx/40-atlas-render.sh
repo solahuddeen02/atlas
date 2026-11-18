@@ -9,7 +9,7 @@
 #   ATLAS_TRUSTED_PROXY_CIDRS  peers allowed to set ATLAS_REAL_IP_HEADER
 #   ATLAS_REAL_IP_HEADER       default X-Forwarded-For
 #   ATLAS_MAX_BODY_SIZE        default 10m
-#   ATLAS_RATE_LIMIT_AUTH      default 10r/m   (/api/auth/)
+#   ATLAS_RATE_LIMIT_AUTH      default 10r/m   (/api/v1/auth/ and /api/auth/)
 #   ATLAS_RATE_LIMIT_API       default 20r/s   (/api/)
 #   ATLAS_IDP_PUBLIC_URL       bundled IdP only, e.g. https://id.example.com (own host)
 #   ATLAS_RATE_LIMIT_IDP_AUTH  default 30r/m   (credential POSTs to the IdP, per client IP)
@@ -224,6 +224,12 @@ EOF
         include $INC;
     }
     location /api/auth/ {
+        limit_req zone=atlas_auth burst=5 nodelay;
+        include $INC;
+    }
+    # The same strict zone for the versioned path: the OIDC callback is registered at
+    # /api/v1/auth/callback, and the API's routes live under /api/v1/ (ADR-003 §5).
+    location /api/v1/auth/ {
         limit_req zone=atlas_auth burst=5 nodelay;
         include $INC;
     }

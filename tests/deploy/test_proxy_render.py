@@ -306,3 +306,16 @@ def test_switching_back_to_byo_removes_the_idp_include(
     result, _ = render()
     assert result.returncode == 0
     assert not inc.exists()
+
+
+def test_the_strict_auth_zone_covers_the_versioned_path(render: Render) -> None:
+    """The OIDC callback is /api/v1/auth/callback (ADR-003 §5): the strict zone covers it."""
+    result, conf = render(ATLAS_RATE_LIMIT_AUTH="5r/m")
+    assert result.returncode == 0, result.stderr
+    assert "zone=atlas_auth:10m rate=5r/m" in conf
+    for path in ("/api/auth/", "/api/v1/auth/"):
+        start = conf.index(f"location {path} {{")
+        block = conf[start : conf.index("}", start)]
+        assert "limit_req zone=atlas_auth burst=5 nodelay;" in block, path
+    general = conf.index("location /api/ {")
+    assert "limit_req zone=atlas_api" in conf[general : conf.index("}", general)]

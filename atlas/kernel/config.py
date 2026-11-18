@@ -18,6 +18,8 @@ import os
 import re
 import string
 from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -35,6 +37,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from atlas.kernel.identity.ratelimit import RateSpec
 from atlas.kernel.identity.record import LOGS_HINT, record_problem
 
 
@@ -82,6 +85,37 @@ DEFAULT_IDP_BACKUP_VERSIONS = 24
 IDP_KANIDM_SERIES = re.compile(r"^[0-9]+\.[0-9]+$")
 _HOST_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 _CRON_FIELD = re.compile(r"^[0-9A-Za-z*/,?-]+$")
+
+# Sessions (ADR-003 §2-§4).
+HOUR = 3600
+DEFAULT_STEP_UP_MAX_AGE = 300
+MIN_SESSION_SECONDS = 5 * 60
+MAX_SESSION_SECONDS = 90 * 24 * HOUR
+_DURATION = re.compile(r"^([1-9][0-9]*)([mhd])$")
+_DURATION_UNITS = {"m": 60, "h": HOUR, "d": 24 * HOUR}
+# RFC 6749 §3.3: a scope token is printable ASCII without space, `"` and `\`.
+_SCOPE_TOKEN = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]+$")
+# Peers whose `X-Real-IP` the API believes when ATLAS_API_TRUSTED_PEERS is unset: the proxy
+# reaches the API from a private (docker network) or loopback address.
+DEFAULT_API_TRUSTED_PEERS = (
+    "127.0.0.0/8",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "fc00::/7",
+)
+
+
+SESSION_ROLES = ("owner", "admin", "adult", "child", "guest")
+
+
+@dataclass(frozen=True)
+class SessionLifetimes:
+    """How long a session may sit idle, and how long it may live at all."""
+
+    idle: timedelta
+    absolute: timedelta
 
 
 class ConfigError(RuntimeError):
@@ -211,6 +245,45 @@ def check_idp_backup_schedule(value: str) -> str:
             "e.g. '0 * * * *') or 7 (second ... year)"
         )
     return " ".join(fields)
+
+
+def parse_duration(value: object) -> int:
+    """A session lifetime such as `30m`, `12h` or `7d`, in seconds (5 minutes to 90 days)."""
+    if isinstance(value, bool) or not isinstance(value, str | int):
+        raise ValueError("must be a duration such as 30m, 12h or 7d")
+    if isinstance(value, int):
+        seconds = value
+    else:
+        match = _DURATION.match(value.strip().lower())
+        if match is None:
+            raise ValueError("must be a duration with a unit: 30m, 12h or 7d")
+        seconds = int(match.group(1)) * _DURATION_UNITS[match.group(2)]
+    if not MIN_SESSION_SECONDS <= seconds <= MAX_SESSION_SECONDS:
+        raise ValueError("must be between 5 minutes and 90 days")
+    return seconds
+
+
+def check_oidc_scopes(value: str) -> str:
+    """ATLAS_OIDC_SCOPES: space-separated scope tokens, `openid` among them."""
+    scopes = value.split()
+    if "openid" not in scopes:
+        raise ValueError("must contain the scope openid")
+    if not all(_SCOPE_TOKEN.match(s) for s in scopes):
+        raise ValueError("must be space-separated scope names")
+    return " ".join(dict.fromkeys(scopes))
+
+
+def check_trusted_peers(value: str) -> str:
+    """ATLAS_API_TRUSTED_PEERS: comma-separated CIDRs, or `none`. Empty means the defaults."""
+    text = value.strip()
+    if text.lower() == "none":
+        return "none"
+    for part in (p.strip() for p in text.split(",") if p.strip()):
+        try:
+            ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            raise ValueError("must be a comma-separated list of CIDR ranges, or `none`") from None
+    return ",".join(p.strip() for p in text.split(",") if p.strip())
 
 
 def _host(url: str) -> str:
@@ -352,6 +425,37 @@ class Settings(DatabaseSettings):
         validation_alias="ATLAS_IDP_BOOTSTRAP_RECORD",
     )
 
+    # Sessions and the OIDC relying party (Phase 5c, ADR-003 §2-§5). Lifetimes are written
+    # like `30m`, `12h` or `7d` and kept as seconds. The defaults are what the bundled IdP
+    # allows: its own session ends after 24 h (8 h for owner and admin), and Atlas ends a
+    # session when the IdP's does, so a longer value would have no effect.
+    step_up_max_age: int = Field(
+        default=DEFAULT_STEP_UP_MAX_AGE, ge=30, le=3600, validation_alias="ATLAS_STEP_UP_MAX_AGE"
+    )
+    session_idle_owner: int = Field(default=4 * HOUR, validation_alias="ATLAS_SESSION_IDLE_OWNER")
+    session_idle_admin: int = Field(default=4 * HOUR, validation_alias="ATLAS_SESSION_IDLE_ADMIN")
+    session_idle_adult: int = Field(default=12 * HOUR, validation_alias="ATLAS_SESSION_IDLE_ADULT")
+    session_idle_child: int = Field(default=12 * HOUR, validation_alias="ATLAS_SESSION_IDLE_CHILD")
+    session_idle_guest: int = Field(default=12 * HOUR, validation_alias="ATLAS_SESSION_IDLE_GUEST")
+    session_max_owner: int = Field(default=8 * HOUR, validation_alias="ATLAS_SESSION_MAX_OWNER")
+    session_max_admin: int = Field(default=8 * HOUR, validation_alias="ATLAS_SESSION_MAX_ADMIN")
+    session_max_adult: int = Field(default=24 * HOUR, validation_alias="ATLAS_SESSION_MAX_ADULT")
+    session_max_child: int = Field(default=24 * HOUR, validation_alias="ATLAS_SESSION_MAX_CHILD")
+    session_max_guest: int = Field(default=24 * HOUR, validation_alias="ATLAS_SESSION_MAX_GUEST")
+    oidc_prompt_login: bool = Field(default=True, validation_alias="ATLAS_OIDC_PROMPT_LOGIN")
+    oidc_scopes_setting: str | None = Field(default=None, validation_alias="ATLAS_OIDC_SCOPES")
+    session_revalidate_interval: int = Field(
+        default=300, ge=5, le=3600, validation_alias="ATLAS_SESSION_REVALIDATE_INTERVAL"
+    )
+    session_revalidate_grace: int = Field(
+        default=900, ge=5, le=86400, validation_alias="ATLAS_SESSION_REVALIDATE_GRACE"
+    )
+    app_rate_auth_ip: str = Field(default="20r/m", validation_alias="ATLAS_APP_RATE_AUTH_IP")
+    app_rate_auth_account: str = Field(
+        default="10r/m", validation_alias="ATLAS_APP_RATE_AUTH_ACCOUNT"
+    )
+    api_trusted_peers_raw: str = Field(default="", validation_alias="ATLAS_API_TRUSTED_PEERS")
+
     log_level: Literal["debug", "info", "warning", "error"] = Field(
         default="info", validation_alias="ATLAS_LOG_LEVEL"
     )
@@ -436,6 +540,94 @@ class Settings(DatabaseSettings):
         if _is_placeholder(secret):
             raise ValueError("is a known placeholder and must not be used")
         return value
+
+    @field_validator(
+        "session_idle_owner",
+        "session_idle_admin",
+        "session_idle_adult",
+        "session_idle_child",
+        "session_idle_guest",
+        "session_max_owner",
+        "session_max_admin",
+        "session_max_adult",
+        "session_max_child",
+        "session_max_guest",
+        mode="before",
+    )
+    @classmethod
+    def _validate_session_duration(cls, value: object) -> int:
+        return parse_duration(value)
+
+    @field_validator("oidc_scopes_setting", mode="before")
+    @classmethod
+    def _validate_oidc_scopes(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return check_oidc_scopes(value) if isinstance(value, str) else value
+
+    @field_validator("app_rate_auth_ip", "app_rate_auth_account", mode="before")
+    @classmethod
+    def _validate_app_rate(cls, value: object) -> object:
+        if isinstance(value, str):
+            try:
+                RateSpec.parse(value.strip())
+            except ValueError:
+                raise ValueError("must look like 20r/m or 5r/s") from None
+            return value.strip()
+        return value
+
+    @field_validator("api_trusted_peers_raw", mode="before")
+    @classmethod
+    def _validate_api_trusted_peers(cls, value: object) -> object:
+        return check_trusted_peers(value) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _check_sessions(self) -> Settings:
+        for role in SESSION_ROLES:
+            if getattr(self, f"session_idle_{role}") > getattr(self, f"session_max_{role}"):
+                raise ValueError(
+                    f"ATLAS_SESSION_IDLE_{role.upper()}: must not exceed "
+                    f"ATLAS_SESSION_MAX_{role.upper()}"
+                )
+        if self.session_revalidate_grace < self.session_revalidate_interval:
+            raise ValueError(
+                "ATLAS_SESSION_REVALIDATE_GRACE: must be at least ATLAS_SESSION_REVALIDATE_INTERVAL"
+            )
+        return self
+
+    def session_lifetimes(self, role: str) -> SessionLifetimes:
+        """The idle and absolute lifetime of a session for a person of `role`."""
+        if role not in SESSION_ROLES:
+            raise ValueError(f"unknown role: {role!r}")
+        return SessionLifetimes(
+            idle=timedelta(seconds=getattr(self, f"session_idle_{role}")),
+            absolute=timedelta(seconds=getattr(self, f"session_max_{role}")),
+        )
+
+    @property
+    def oidc_scopes(self) -> str:
+        """ATLAS_OIDC_SCOPES, or the default for the mode: `groups` is how the bundled IdP's
+        role groups reach Atlas, and a BYO provider may not offer that scope."""
+        if self.oidc_scopes_setting is not None:
+            return self.oidc_scopes_setting
+        return "openid profile groups" if self.bundled_idp else "openid profile"
+
+    @property
+    def api_trusted_peers(self) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        """Peers whose `X-Real-IP` the API believes (ADR-003 §4, "Client address")."""
+        raw = self.api_trusted_peers_raw
+        if raw == "none":
+            return ()
+        parts = [p for p in raw.split(",") if p] or list(DEFAULT_API_TRUSTED_PEERS)
+        return tuple(ipaddress.ip_network(p, strict=False) for p in parts)
+
+    @property
+    def rate_auth_ip(self) -> RateSpec:
+        return RateSpec.parse(self.app_rate_auth_ip)
+
+    @property
+    def rate_auth_account(self) -> RateSpec:
+        return RateSpec.parse(self.app_rate_auth_account)
 
     # Derived settings. Production values can't be overridden.
 

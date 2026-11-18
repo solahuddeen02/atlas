@@ -145,9 +145,9 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | `ATLAS_SESSION_REVALIDATE_INTERVAL` | `300` | Seconds between an Atlas session's checks with the IdP (5 to 3600). A person disabled in the IdP loses their Atlas session within this time |
 | `ATLAS_SESSION_REVALIDATE_GRACE` | `900` | Seconds the IdP may be unreachable before Atlas sessions end (at least the interval). Until then sessions continue |
 | `ATLAS_APP_RATE_AUTH_IP` / `ATLAS_APP_RATE_AUTH_ACCOUNT` | `20r/m` / `10r/m` | Atlas's own limits on logins and callbacks, per client address and per account (`Nr/s` or `Nr/m`), on top of the proxy's |
-| `ATLAS_API_TRUSTED_PEERS` | loopback and private address ranges | Peers whose `X-Real-IP` the API believes (only the bundled proxy can reach it). The address is used for rate limits and the audit log, never to decide what someone may do |
+| `ATLAS_API_TRUSTED_PEERS` | loopback and private address ranges | Comma-separated CIDR ranges of the peers whose `X-Real-IP` the API believes (only the bundled proxy can reach it); `none` believes no one. The address is used for rate limits and the audit log, never to decide what someone may do |
 
-The settings for sessions, `ATLAS_OIDC_*` login and the app-level limits above are read from Phase 5c on.
+The settings for sessions, `ATLAS_OIDC_*` login and the app-level limits above are validated from Phase 5c-1 on (an invalid value stops the API from starting) and used as the login and session routes arrive in 5c-2 and 5c-3.
 | `ATLAS_MODULES` | `hello,immich` (Foundation) | Installed modules to load. Enabling them happens in the admin console |
 | `ATLAS_MODULE_<ID>_*` | per module | Non-secret module settings, documented by each module |
 | `ATLAS_CONNECTOR_<NAME>_*` | *(unset)* | Connector secrets referenced by name from the console, e.g. `ATLAS_CONNECTOR_IMMICH_API_KEY`. Put them in `${ATLAS_SECRETS_DIR}/atlas/connectors.env` |

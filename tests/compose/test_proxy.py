@@ -151,6 +151,17 @@ def test_auth_rate_limit_returns_429(make_stack: MakeStack) -> None:
     assert statuses[0] != 429
 
 
+def test_auth_rate_limit_covers_the_versioned_auth_path(make_stack: MakeStack) -> None:
+    # The OIDC callback is registered at /api/v1/auth/callback (ADR-003 §5). The API has no
+    # route there yet (404); the proxy's strict zone answers 429 before it gets that far.
+    stack = make_stack(extra_env={"ATLAS_RATE_LIMIT_AUTH": "2r/m"})
+    stack.up()
+    stack.wait_healthy()
+    statuses = [stack.request("/api/v1/auth/callback")[0] for _ in range(12)]
+    assert 429 in statuses
+    assert statuses[0] != 429
+
+
 def test_body_size_limit_returns_413(make_stack: MakeStack) -> None:
     stack = make_stack(extra_env={"ATLAS_MAX_BODY_SIZE": "1k"})
     stack.up()

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,12 +15,25 @@ from sqlalchemy import Engine, text
 import atlas
 from atlas.kernel.config import Settings
 from atlas.kernel.db.engine import make_engine
+from atlas.kernel.web.auth import ApiError, api_error_handler
 
 logger = logging.getLogger("atlas.health")
 
 
-def create_app(settings: Settings, *, engine: Engine | None = None) -> FastAPI:
-    """Build the API. `engine` is created from Settings on first use unless given (tests)."""
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def create_app(
+    settings: Settings,
+    *,
+    engine: Engine | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> FastAPI:
+    """Build the API. `engine` is created from Settings on first use unless given (tests).
+
+    `clock` is the time sessions, rate limits and step-up are judged by (frozen in tests).
+    """
     state: dict[str, Engine] = {}
     if engine is not None:
         state["engine"] = engine
@@ -46,6 +60,9 @@ def create_app(settings: Settings, *, engine: Engine | None = None) -> FastAPI:
         openapi_url="/openapi.json" if settings.docs_enabled else None,
     )
     app.state.settings = settings
+    app.state.get_engine = get_engine
+    app.state.clock = clock or _utc_now
+    app.add_exception_handler(ApiError, api_error_handler)
 
     if settings.cors_origins:
         app.add_middleware(
