@@ -25,6 +25,7 @@ KERNEL_TABLES = {
     "connectors",
     "outbox",
     "rate_limits",
+    "login_attempts",
     "settings",
 }
 # `*_id` columns that deliberately have no FK (documented in metadata.py).
@@ -183,8 +184,8 @@ def test_constraints_reject_bad_rows(migrated_db: PgTestDb) -> None:
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             conn.execute(
                 "INSERT INTO kernel.sessions (id, token_hash, user_id, auth_time, "
-                "idle_expires_at, absolute_expires_at) "
-                "VALUES (%s, '\\x00', %s, now(), now(), now())",
+                "idle_expires_at, absolute_expires_at, csrf_token) "
+                "VALUES (%s, '\\x00', %s, now(), now(), now(), 'x')",
                 (uuid7(), uuid7()),
             )
 
@@ -201,5 +202,8 @@ def test_session_timezone_utc(migrated_db: PgTestDb) -> None:
 
 def test_migrations_directory_has_only_kernel_branch() -> None:
     versions = Path(__file__).resolve().parents[3] / "atlas/kernel/migrations/versions"
-    assert sorted(p.name for p in versions.glob("*.py")) == ["0001_kernel_baseline.py"]
-    assert head_revisions() == ("0001",)
+    assert sorted(p.name for p in versions.glob("*.py")) == [
+        "0001_kernel_baseline.py",
+        "0002_sessions_login_attempts.py",
+    ]
+    assert head_revisions() == ("0002",)

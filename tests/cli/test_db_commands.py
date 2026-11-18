@@ -49,7 +49,7 @@ def test_migrate_needs_only_database_settings(
     monkeypatch.setenv("ATLAS_ENV", "development")
     assert main(["migrate"]) == 0
     out = capsys.readouterr()
-    assert "up to date at 0001" in out.out
+    assert "up to date at 0002" in out.out
     for secret in (migrated_db.cluster.app_password, migrated_db.cluster.migrator_password):
         assert secret not in out.out + out.err
 

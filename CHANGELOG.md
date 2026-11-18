@@ -78,6 +78,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - tests: one contract suite run against both adapters, and a compose test of a whole lifecycle against the real Kanidm that also searches every service's log for each secret it handled.
 - `SECURITY.md` (private vulnerability reporting) and this changelog.
 - Spike S recorded: Kanidm 1.12.0 confirmed as bundled IdP ([ADR-001](docs/adr/001-identity.md#spike-results) outcome (b)).
+- **Sessions, without a login yet** (Phase 5c-1, [ADR-003 §4](docs/adr/003-internet-exposure.md#4-sessions-and-revocation)): migration `0002` (new columns on `kernel.sessions`, the `kernel.login_attempts` table), the session store (a cookie value is 256 random bits and only its SHA-256 is stored; one lookup per request; revocation is immediate and clears the stored IdP token, which is handed back to be revoked at the IdP), the encryption of what is stored for a session (HKDF per use, AES-GCM, the row's id as associated data), CSRF with the `Origin` rule, step-up as a dependency (nothing calls it yet), app-layer rate limits (atomic counters in Postgres), the `next` check and the client-address rule, and the settings listed in [SELF_HOSTING](docs/SELF_HOSTING.md#application-settings). There is no login route: the relying party follows in 5c-2 and 5c-3, so nothing changes for people yet. The proxy's strict rate-limit zone also covers `/api/v1/auth/`.
 
 ### Changed
 
@@ -127,6 +128,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
 - **Phase 5c design (documentation only):** nothing to do.
+- **Phase 5c-1 (sessions, no login yet):** `atlas-migrate` applies migration `0002` on the next `docker compose up -d`, after its usual pre-migration dump. It adds columns to the empty `kernel.sessions` table and creates `kernel.login_attempts`; nothing else changes. The new settings are optional and nothing reads them until 5c-2. The proxy configuration is re-rendered when `atlas-proxy` is recreated (it now has a second strict zone location). No action needed.
 - **Faster start:** no action needed beyond `docker compose up -d`. Docker Engine 25.0 or newer and Compose 2.20.2 or newer are required (the bundled IdP already needed them; they are now stated in [SELF_HOSTING](docs/SELF_HOSTING.md#requirements)).
 - **If you run a pre-release checkout from before the identity adapter** (5b-3b), run `docker compose up -d` as usual:
   - **`atlas-api` is recreated** with one new read-only mount, `secrets/idp-trust/` (the IdP's public CA certificate). The directory already exists; nothing to create.

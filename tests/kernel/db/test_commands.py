@@ -18,8 +18,8 @@ from atlas.kernel.db.migrate import MigrateError, current_revisions, run_migrate
 from tests.conftest import PgTestDb
 
 EXTRA_MIGRATION = """
-revision = "0002"
-down_revision = "0001"
+revision = "0003"
+down_revision = "0002"
 branch_labels = None
 depends_on = None
 
@@ -38,10 +38,10 @@ def downgrade():
 
 @pytest.fixture
 def pending_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Make one extra revision (0002) available, as a future release would."""
+    """Make one extra revision (0003) available, as a future release would."""
     extra = tmp_path / "extra_versions"
     extra.mkdir()
-    (extra / "0002_extra.py").write_text(EXTRA_MIGRATION)
+    (extra / "0003_extra.py").write_text(EXTRA_MIGRATION)
     original = migrate_mod.alembic_config
 
     def with_extra(connection=None):  # type: ignore[no-untyped-def]
@@ -51,7 +51,7 @@ def pending_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         return config
 
     monkeypatch.setattr(migrate_mod, "alembic_config", with_extra)
-    return "0002"
+    return "0003"
 
 
 def revisions(db: PgTestDb) -> tuple[str, ...]:
@@ -68,11 +68,11 @@ def revisions(db: PgTestDb) -> tuple[str, ...]:
 
 def test_migrate_dumps_before_pending(migrated_db: PgTestDb, pending_revision: str) -> None:
     result = run_migrate(migrated_db.settings)
-    assert result.before == ("0001",)
+    assert result.before == ("0002",)
     assert result.after == (pending_revision,)
     assert result.dump is not None
     assert result.dump.parent == migrated_db.settings.backup_dir
-    assert result.dump.name.startswith("pre-migrate-") and result.dump.name.endswith("-0001.dump")
+    assert result.dump.name.startswith("pre-migrate-") and result.dump.name.endswith("-0002.dump")
     assert result.dump.stat().st_size > 0
     assert stat.S_IMODE(result.dump.stat().st_mode) == 0o600
 
@@ -92,7 +92,7 @@ def test_migrate_aborts_if_dump_fails(
 
     with pytest.raises(MigrateError, match="pre-migration backup failed, nothing was migrated"):
         run_migrate(migrated_db.settings)
-    assert revisions(migrated_db) == ("0001",)
+    assert revisions(migrated_db) == ("0002",)
     assert not list(migrated_db.settings.backup_dir.glob("*.partial"))
 
 
@@ -188,7 +188,7 @@ def test_backup_restore_roundtrip(migrated_db: PgTestDb) -> None:
             )
         result = run_backup(migrated_db.settings)
         manifest = json.loads((result.path / "manifest.json").read_text())
-        assert manifest["revisions"] == ["0001"]
+        assert manifest["revisions"] == ["0002"]
         assert stat.S_IMODE((result.path / "atlas.dump").stat().st_mode) == 0o600
         assert "password" not in json.dumps(manifest).lower()
 
@@ -198,7 +198,7 @@ def test_backup_restore_roundtrip(migrated_db: PgTestDb) -> None:
                 text("INSERT INTO kernel.audit_log (action, result) VALUES ('x', 'allowed')")
             )
 
-        assert run_restore(migrated_db.settings, result.path) == ("0001",)
+        assert run_restore(migrated_db.settings, result.path) == ("0002",)
         with engine.connect() as conn:
             assert conn.execute(text("SELECT value FROM kernel.settings")).scalar() == "before"
             assert conn.execute(text("SELECT count(*) FROM kernel.audit_log")).scalar() == 0

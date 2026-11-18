@@ -181,8 +181,51 @@ sessions = Table(
     Column("idp_sid", Text),
     Column("user_agent", Text),
     Column("client_ip", INET),
+    # The per-session CSRF synchronizer token (ADR-003 §4). The store always writes one.
+    Column("csrf_token", Text, nullable=False),
+    # The IdP refresh token, encrypted by the application; null once revoked.
+    Column("idp_tokens_enc", LargeBinary),
+    _ts("revalidate_after"),
+    # Why `revoked_at` is set. Set together or not at all.
+    Column("revoked_reason", Text),
     UniqueConstraint("token_hash"),
+    CheckConstraint(
+        "revoked_reason IN ('logout', 'user', 'admin', 'disabled', 'role_changed', 'expired', "
+        "'idp_ended', 'idp_unreachable', 'replaced')",
+        name="revoked_reason",
+    ),
+    CheckConstraint("(revoked_at IS NULL) = (revoked_reason IS NULL)", name="revoked_pair"),
     Index("ix_sessions_absolute_expires_at", "absolute_expires_at"),
+    Index(
+        "ix_sessions_user_id_active",
+        "user_id",
+        postgresql_where=text("revoked_at IS NULL"),
+    ),
+)
+
+# A login (or step-up) in flight: consumed by one DELETE ... RETURNING (ADR-003 §4).
+login_attempts = Table(
+    "login_attempts",
+    metadata,
+    _uuid_pk(),
+    Column("cookie_hash", LargeBinary, nullable=False),
+    Column("state_hash", LargeBinary, nullable=False),
+    Column("nonce", Text, nullable=False),
+    Column("code_verifier_enc", LargeBinary, nullable=False),
+    Column("purpose", Text, nullable=False),
+    # The session being stepped up; null for a login.
+    Column(
+        "session_id", UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), index=True
+    ),
+    Column("next_path", Text, nullable=False, server_default="/"),
+    Column("prompt_login", Boolean, nullable=False, server_default=text("true")),
+    _ts("created_at"),
+    _ts("expires_at", default_now=False),
+    UniqueConstraint("cookie_hash"),
+    UniqueConstraint("state_hash"),
+    CheckConstraint("purpose IN ('login', 'step_up')", name="purpose"),
+    CheckConstraint("(purpose = 'step_up') = (session_id IS NOT NULL)", name="purpose_session"),
+    Index("ix_login_attempts_expires_at", "expires_at"),
 )
 
 audit_log = Table(
