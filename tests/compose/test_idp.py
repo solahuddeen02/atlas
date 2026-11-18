@@ -1,7 +1,8 @@
 """Compose acceptance tests for Phase 5a: the bundled Kanidm IdP (PLAN-v1; ADR-001).
 
 Run by the `compose` CI job (RUN_COMPOSE_TESTS=1). Each test builds its own
-throwaway stack; see tests/compose/stack.py.
+throwaway stack, except the read-only ones, which share the session's default stacks
+(`shared_byo`, `shared_bundled` in conftest.py); see tests/compose/stack.py.
 """
 
 import http.client
@@ -151,10 +152,8 @@ def test_bundled_config(make_stack: MakeStack) -> None:
     )  # never the CA's private key directory (idp-ca)
 
 
-def test_idp_healthy_and_proxied_over_verified_tls(make_stack: MakeStack) -> None:
-    stack = make_stack(idp=True)  # the default (hourly) online-backup schedule
-    stack.up()
-    stack.wait_healthy()
+def test_idp_healthy_and_proxied_over_verified_tls(shared_bundled: Stack) -> None:
+    stack = shared_bundled  # the default (hourly) online-backup schedule
 
     info = json.loads(run(["docker", "inspect", stack.container_id("idp")]).stdout)[0]
     assert info["Config"]["User"] == "10002:10002"
@@ -189,10 +188,8 @@ def test_idp_healthy_and_proxied_over_verified_tls(make_stack: MakeStack) -> Non
     assert "running as uid == 0" not in logs
 
 
-def test_idp_files_and_dirs_ownership(make_stack: MakeStack) -> None:
-    stack = make_stack(idp=True)
-    stack.up()
-    stack.wait_healthy()
+def test_idp_files_and_dirs_ownership(shared_bundled: Stack) -> None:
+    stack = shared_bundled
     paths = [
         "/secrets/idp-ca",
         "/secrets/idp-ca/ca.key",
@@ -260,12 +257,12 @@ def run_inspect_mounts(stack: Stack, service: str) -> list[str]:
 
 
 @pytest.mark.parametrize("idp", [False, True], ids=["byo", "bundled"])
-def test_proxy_gateway_trust_unchanged_with_idp_network(make_stack: MakeStack, idp: bool) -> None:
+def test_proxy_gateway_trust_unchanged_with_idp_network(
+    request: pytest.FixtureRequest, idp: bool
+) -> None:
     # ADR-003 §1: with idp-front attached (in both modes), the trusted gateway is still
     # the default network's: idp-front is internal and has no route.
-    stack = make_stack(idp=idp)
-    stack.up()
-    stack.wait_healthy()
+    stack: Stack = request.getfixturevalue("shared_bundled" if idp else "shared_byo")
     line = next(line for line in stack.logs("atlas-proxy").splitlines() if "trusted peers:" in line)
     peers = line.split("trusted peers:")[1].split()
     gateway = stack.network_gateway("default")
@@ -273,10 +270,8 @@ def test_proxy_gateway_trust_unchanged_with_idp_network(make_stack: MakeStack, i
     assert not gateway.startswith(stack.idp_subnet.rsplit(".", 1)[0] + ".")
 
 
-def test_kanidm_sees_the_real_client_ip(make_stack: MakeStack) -> None:
-    stack = make_stack(idp=True)
-    stack.up()
-    stack.wait_healthy()
+def test_kanidm_sees_the_real_client_ip(shared_bundled: Stack) -> None:
+    stack = shared_bundled
 
     # 1. From the host: the peer is the trusted gateway (where a tunnel connects), so
     #    its X-Forwarded-For names the client, and Kanidm sees that client.
@@ -348,14 +343,12 @@ def tcp_probe(network: str, address: str, port: int) -> str:
     return run([*cmd, "-c", TCP_PROBE, address, str(port)]).stdout.strip()
 
 
-def test_host_cannot_reach_idp_on_idp_front(make_stack: MakeStack) -> None:
+def test_host_cannot_reach_idp_on_idp_front(shared_bundled: Stack) -> None:
     # Kanidm trusts X-Forwarded-For from the whole idp-front subnet. A bridge network's
     # gateway address is in that subnet and belongs to the host, so a process on the
     # host could connect to idp from it and name any client. idp-front therefore has no
     # host address at all (inhibit_ipv4).
-    stack = make_stack(idp=True)
-    stack.up()
-    stack.wait_healthy()
+    stack = shared_bundled
     idp_front = stack.service_address("idp", "idp-front")
     trusted = ipaddress.ip_network(stack.idp_subnet)
     assert ipaddress.ip_address(idp_front) in trusted
@@ -394,13 +387,11 @@ def test_host_cannot_reach_idp_on_idp_front(make_stack: MakeStack) -> None:
     assert not [a for a in seen if ipaddress.ip_address(a) in trusted], seen
 
 
-def test_byo_idp_trust_dir_is_root_owned_and_empty(make_stack: MakeStack) -> None:
+def test_byo_idp_trust_dir_is_root_owned_and_empty(shared_byo: Stack) -> None:
     # BYO: atlas-proxy still mounts secrets/idp-trust. Whoever created it first (Docker,
     # for the missing mount source, or atlas-init), init leaves it root-owned, 0755, and
     # nothing is written into it.
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+    stack = shared_byo
     script = (
         "import json,os;p='/secrets/idp-trust';s=os.stat(p);"
         "print(json.dumps([s.st_uid,s.st_gid,oct(s.st_mode&0o7777),os.listdir(p),"

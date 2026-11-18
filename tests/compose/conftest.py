@@ -120,3 +120,67 @@ def make_stack(
             # Shown in the failure report ("Captured stderr teardown").
             print(stack.diagnostics(), file=sys.stderr)
         stack.destroy()
+
+
+# --- Shared stacks (read-only tests only) ---------------------------------------------------
+# One default stack per mode for the whole session, for tests that only read: HTTP requests,
+# `compose run --rm` one-offs, SELECTs, inspect and log reads. A test that changes a stack's
+# state, restarts or stops a service, sets another env value, or breaks the stack on purpose
+# uses `make_stack` instead. Before each test the shared stack must still be healthy; if not,
+# the test that ran on it before is named, so one test breaking it is not blamed on the next.
+
+LAST_ON: dict[str, str] = {}  # project -> the last test that used that shared stack
+
+
+def _shared(
+    tmp_path_factory: pytest.TempPathFactory, name: str, **kwargs: object
+) -> Iterator[Stack]:
+    stack = Stack(workdir=tmp_path_factory.mktemp(name), **kwargs)  # type: ignore[arg-type]
+    try:
+        stack.up()
+        stack.wait_healthy()
+        yield stack
+    finally:
+        stack.destroy()  # by project name: compose down (never -v) and its own volumes
+
+
+def _guard(stack: Stack, request: pytest.FixtureRequest) -> Iterator[Stack]:
+    needed = {"atlas-api", "atlas-proxy"} | ({"idp"} if stack.idp else set())
+    healthy = {str(s.get("Service")) for s in stack.states() if s.get("Health") == "healthy"}
+    if not needed <= healthy:
+        stack.fail(
+            f"the shared stack {stack.project} is not healthy before {request.node.nodeid} "
+            f"(healthy: {sorted(healthy)}, needed: {sorted(needed)}). It was healthy when it "
+            f"came up, so the test that used it before this one broke it: "
+            f"{LAST_ON.get(stack.project, 'none')}"
+        )
+    LAST_ON[stack.project] = request.node.nodeid
+    yield stack
+    if request.node.stash.get(FAILED, False):
+        print(stack.diagnostics(), file=sys.stderr)
+
+
+@pytest.fixture(scope="session")
+def _shared_byo_stack(
+    tmp_path_factory: pytest.TempPathFactory, atlas_image: str
+) -> Iterator[Stack]:
+    yield from _shared(tmp_path_factory, "shared-byo")
+
+
+@pytest.fixture(scope="session")
+def _shared_bundled_stack(
+    tmp_path_factory: pytest.TempPathFactory, atlas_image: str
+) -> Iterator[Stack]:
+    yield from _shared(tmp_path_factory, "shared-bundled", idp=True)
+
+
+@pytest.fixture
+def shared_byo(_shared_byo_stack: Stack, request: pytest.FixtureRequest) -> Iterator[Stack]:
+    """The session's default BYO-OIDC stack, healthy; for read-only tests."""
+    yield from _guard(_shared_byo_stack, request)
+
+
+@pytest.fixture
+def shared_bundled(_shared_bundled_stack: Stack, request: pytest.FixtureRequest) -> Iterator[Stack]:
+    """The session's default bundled-IdP stack, healthy; for read-only tests."""
+    yield from _guard(_shared_bundled_stack, request)

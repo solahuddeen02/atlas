@@ -3,7 +3,8 @@
 The proxy (Phase 4) has its own file, test_proxy.py.
 
 Run by the `compose` CI job (RUN_COMPOSE_TESTS=1). Each test builds its own
-throwaway stack; see tests/compose/stack.py.
+throwaway stack, except the two read-only first-boot checks, which share the session's
+default stack (`shared_byo` in conftest.py); see tests/compose/stack.py.
 """
 
 import json
@@ -38,10 +39,8 @@ def test_compose_config_renders_from_env_example() -> None:
     assert result.returncode == 0
 
 
-def test_stack_comes_up_healthy(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_stack_comes_up_healthy(shared_byo: Stack) -> None:
+    stack = shared_byo
     assert stack.get("/health") == (200, b'{"status":"ok"}')
     # Production mode: no interactive docs (through the proxy).
     assert stack.get("/docs")[0] == 404
@@ -49,10 +48,8 @@ def test_stack_comes_up_healthy(make_stack: MakeStack) -> None:
     assert stack.psql("SELECT id FROM kernel.modules") == "kernel"
 
 
-def test_secret_file_permissions(make_stack: MakeStack) -> None:
-    stack = make_stack()
-    stack.up()
-    stack.wait_healthy()
+def test_secret_file_permissions(shared_byo: Stack) -> None:
+    stack = shared_byo
     owners = json.loads(
         stack.compose(
             "run",
