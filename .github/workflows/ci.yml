@@ -160,6 +160,14 @@ jobs:
       - name: npm audit (legacy/frontend, runtime deps)
         working-directory: legacy/frontend
         run: npm audit --omit=dev
+      - name: npm audit (legacy/frontend, dev tools included, informational)
+        # Build tools (vite, tailwindcss, eslint) are devDependencies: nothing of them is in
+        # the built frontend, so they are not part of the enforced check above. This step
+        # keeps their advisories visible, for example picomatch GHSA-fc5q-39xc-vjpf (no
+        # patched release yet), until they are fixed. It never fails the job.
+        continue-on-error: true
+        working-directory: legacy/frontend
+        run: npm audit
       - name: pip-audit (legacy, informational)
         # python-jose -> ecdsa has advisories with no fixed release. Legacy auth is
         # replaced in Phase 5 and not carried forward, so this only reports.
