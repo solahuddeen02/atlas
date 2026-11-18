@@ -234,7 +234,7 @@ def test_an_unsafe_request_without_a_session_is_a_401_not_a_403(client: TestClie
     assert (response.status_code, response.json()) == (401, NOT_AUTHENTICATED)
 
 
-def test_a_session_without_a_stored_csrf_token_fails_every_unsafe_request(
+def test_a_session_with_an_empty_csrf_token_fails_every_unsafe_request(
     client: TestClient,
     store: SessionStore,
     app_engine: Engine,
@@ -244,7 +244,7 @@ def test_a_session_without_a_stored_csrf_token_fails_every_unsafe_request(
     issued, cookie = sign_in(store, make_user, clock)
     with app_engine.begin() as connection:
         connection.execute(
-            text("UPDATE kernel.sessions SET csrf_token = NULL WHERE id = :i"),
+            text("UPDATE kernel.sessions SET csrf_token = '' WHERE id = :i"),
             {"i": issued.session.id},
         )
     for token in ("", "None", "null", "undefined", "0"):

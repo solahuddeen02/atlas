@@ -184,8 +184,8 @@ def test_constraints_reject_bad_rows(migrated_db: PgTestDb) -> None:
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             conn.execute(
                 "INSERT INTO kernel.sessions (id, token_hash, user_id, auth_time, "
-                "idle_expires_at, absolute_expires_at) "
-                "VALUES (%s, '\\x00', %s, now(), now(), now())",
+                "idle_expires_at, absolute_expires_at, csrf_token) "
+                "VALUES (%s, '\\x00', %s, now(), now(), now(), 'x')",
                 (uuid7(), uuid7()),
             )
 

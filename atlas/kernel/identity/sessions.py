@@ -123,7 +123,7 @@ class Session:
     idle_expires_at: datetime
     absolute_expires_at: datetime
     # The synchronizer token the SPA sends back as X-CSRF-Token. Secret: never in a repr.
-    csrf_token: str | None = field(default=None)
+    csrf_token: str
 
     def __repr__(self) -> str:
         return f"Session(user_id={self.user_id}, role={self.role.value})"

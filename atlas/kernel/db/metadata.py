@@ -181,9 +181,8 @@ sessions = Table(
     Column("idp_sid", Text),
     Column("user_agent", Text),
     Column("client_ip", INET),
-    # The per-session CSRF synchronizer token (ADR-003 §4). Nullable on purpose: the store
-    # always writes one, and a row without one fails every unsafe request.
-    Column("csrf_token", Text),
+    # The per-session CSRF synchronizer token (ADR-003 §4). The store always writes one.
+    Column("csrf_token", Text, nullable=False),
     # The IdP refresh token, encrypted by the application; null once revoked.
     Column("idp_tokens_enc", LargeBinary),
     _ts("revalidate_after"),

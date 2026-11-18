@@ -65,11 +65,18 @@ def new_user(conn: psycopg.Connection[Any]) -> str:
     return user_id
 
 
-def new_session(conn: psycopg.Connection[Any], user_id: str, **extra: str) -> str:
+def new_session(
+    conn: psycopg.Connection[Any], user_id: str, *, csrf: bool = True, **extra: str
+) -> str:
+    """A session row. `csrf=False` is for the baseline schema, which has no such column."""
     session_id = str(uuid4())
     names = ["id", "token_hash", "user_id", "auth_time", "idle_expires_at", "absolute_expires_at"]
     marks = ["%s", "%s", "%s", "now()", "now()", "now()"]
     values: list[Any] = [session_id, secrets.token_bytes(32), user_id]
+    if csrf:
+        names.append("csrf_token")
+        marks.append("%s")
+        values.append(secrets.token_urlsafe(32))
     for name, value in extra.items():
         names.append(name)
         marks.append("now()" if value == "now()" else "%s")
@@ -144,7 +151,7 @@ def test_a_session_row_left_by_a_pre_release_build_is_cleared(empty_db: PgTestDb
     """Nothing creates sessions before 5c, so there are none; if one is there, it goes."""
     upgrade_to(empty_db, "0001")
     with empty_db.superuser_connect() as conn:
-        new_session(conn, new_user(conn))
+        new_session(conn, new_user(conn), csrf=False)  # the baseline has no csrf_token
         assert conn.execute("SELECT count(*) FROM kernel.sessions").fetchone() == (1,)
     run_migrate(empty_db.settings)
     with empty_db.superuser_connect() as conn:
@@ -257,17 +264,31 @@ def test_revoked_at_and_its_reason_go_together(migrated_db: PgTestDb) -> None:
             new_session(conn, user, revoked_at="now()", revoked_reason=reason)
 
 
-def test_a_session_without_a_csrf_token_is_possible_but_marked_by_null(
-    migrated_db: PgTestDb,
-) -> None:
+def test_a_session_must_have_a_csrf_token(migrated_db: PgTestDb) -> None:
+    with app_conn(migrated_db) as conn:
+        user = new_user(conn)
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            new_session(conn, user, csrf=False)
+        session = new_session(conn, user)
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            conn.execute("UPDATE kernel.sessions SET csrf_token = NULL WHERE id = %s", (session,))
+    with migrated_db.superuser_connect() as conn:
+        nullable = conn.execute(
+            "SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'kernel' "
+            "AND table_name = 'sessions' AND column_name = 'csrf_token'"
+        ).fetchone()
+    assert nullable == ("NO",)
+
+
+def test_a_new_session_has_no_stored_token_and_is_not_revoked(migrated_db: PgTestDb) -> None:
     with app_conn(migrated_db) as conn:
         session = new_session(conn, new_user(conn))
         row = conn.execute(
-            "SELECT csrf_token, idp_tokens_enc, revoked_reason, revalidate_after IS NOT NULL "
+            "SELECT idp_tokens_enc, revoked_reason, revalidate_after IS NOT NULL "
             "FROM kernel.sessions WHERE id = %s",
             (session,),
         ).fetchone()
-        assert row == (None, None, None, True)
+        assert row == (None, None, True)
 
 
 def test_a_login_is_a_login_or_a_step_up_of_a_session(migrated_db: PgTestDb) -> None:

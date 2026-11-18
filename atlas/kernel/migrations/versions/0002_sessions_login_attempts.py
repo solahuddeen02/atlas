@@ -4,9 +4,9 @@
 no session can exist before this revision: it clears the table (a no-op everywhere) and
 then adds what the session store needs.
 
-- `csrf_token`: the per-session synchronizer token. Nullable on purpose: the store always
-  writes one, and a row without one fails every unsafe request, so the database never
-  invents a value of its own.
+- `csrf_token`: the per-session synchronizer token, NOT NULL. The store always writes
+  one; the database never invents a value of its own. (The table is empty, so the column
+  can be added without a default.)
 - `idp_tokens_enc`: the IdP refresh token, encrypted by the application (AES-GCM, the
   row's id as associated data). Cleared when it is taken to be revoked at the IdP, and
   deleted with the row.
@@ -53,7 +53,7 @@ def upgrade() -> None:
     # no row. It is here so that the NOT NULL column below can never meet an old one.
     op.execute("DELETE FROM kernel.sessions")
 
-    op.add_column("sessions", sa.Column("csrf_token", sa.Text(), nullable=True), schema="kernel")
+    op.add_column("sessions", sa.Column("csrf_token", sa.Text(), nullable=False), schema="kernel")
     op.add_column(
         "sessions", sa.Column("idp_tokens_enc", sa.LargeBinary(), nullable=True), schema="kernel"
     )
