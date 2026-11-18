@@ -89,6 +89,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
 - With the bundled IdP, `ATLAS_ENV_FILES` for `atlas-api` ends with `/run/secrets/atlas-idp/idp.env`, so its client secret wins over one in `app.env`.
 - `httpx` is now a runtime dependency of the Atlas image (the Kanidm client uses it). It was a development dependency before.
 - The check that the pinned Kanidm digest still matches its tag moved out of the `compose` CI job into its own workflow (`kanidm-digest`). It runs when `deploy/docker-compose.yml` changes, weekly and on demand, retries registry errors, and is not a required check, so a Docker Hub rate limit no longer fails unrelated pull requests.
+- `atlas-api` and `atlas-proxy` are probed every second while they start (`start_period: 30s`, `start_interval: 1s`), so `docker compose up -d` reports a healthy stack about 8 seconds sooner. Their intervals, timeouts and retries are unchanged. This needs Docker Engine 25.0 or newer and Compose 2.20.2 or newer, which the `idp` service already needed.
 
 ### Fixed
 
@@ -123,6 +124,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
+- **Faster start:** no action needed beyond `docker compose up -d`. Docker Engine 25.0 or newer and Compose 2.20.2 or newer are required (the bundled IdP already needed them; they are now stated in [SELF_HOSTING](docs/SELF_HOSTING.md#requirements)).
 - **If you run a pre-release checkout from before the identity adapter** (5b-3b), run `docker compose up -d` as usual:
   - **`atlas-api` is recreated** with one new read-only mount, `secrets/idp-trust/` (the IdP's public CA certificate). The directory already exists; nothing to create.
   - **`ATLAS_IDP_ADMIN_TOKEN` is now required** with the bundled IdP. An install that has run the IdP bootstrap already has it in `secrets/atlas-idp/idp.env`; nothing to do. Without it `atlas-api` refuses to start and says which variable.

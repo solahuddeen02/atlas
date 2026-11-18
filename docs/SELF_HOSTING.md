@@ -24,7 +24,7 @@
 | Item | Requirement |
 |---|---|
 | Host | Any 64-bit Linux host (amd64 or arm64): a mini-PC, NAS, VM or small cloud instance |
-| Software | Docker Engine with the Compose v2 plugin (a current release) |
+| Software | Docker Engine **25.0 or newer** with the Compose v2 plugin **2.20.2 or newer** (the healthchecks use `start_interval`; Compose refuses an older engine with a clear error) |
 | Resources | About 1 GB of free RAM and 2 GB of disk for Atlas + Postgres + the bundled IdP. Immich has its own requirements |
 | Domain names | **Two HTTPS hostnames you control**: one for Atlas (e.g. `atlas.example.com`) and one for the identity provider (e.g. `id.example.com`). Immich, if you use it, has its own. See [why two](#why-two-hostnames) |
 | TLS | Valid, publicly trusted certificates for those hostnames, provided by whatever sits in front of Atlas (a tunnel or your reverse proxy). Self-signed certificates break passkeys and the Immich mobile app |
