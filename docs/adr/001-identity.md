@@ -117,7 +117,7 @@ Libraries: `authlib` (as OP and RP), `argon2-cffi`, `pyotp`, `py_webauthn`, plus
 
 ### Atlas as relying party
 
-- Authorization-code flow with PKCE, through `authlib`'s client.
+- Authorization-code flow with PKCE (S256, ES256), using `authlib`'s protocol and claims code and `joserfc`, with Atlas's own `httpx` calls. `authlib`'s `httpx` client is deprecated in favour of `httpx2`, and Atlas already has hardened CA, timeout and redirect handling for its calls to Kanidm.
 - Strict ID-token validation: `iss`, `aud`, `exp`, `nonce`, the signature against the cached JWKS, and `auth_time`.
 - After the callback, Atlas creates its **own server-side session**. It uses an opaque `__Host-` cookie that is HttpOnly, Secure and SameSite=Lax, with a row in Postgres. IdP tokens never reach the browser ([ADR-003](003-internet-exposure.md)).
 - **No local passwords exist in Atlas.** The legacy `users.hashed_password`, `/auth/register` and HS256 JWTs are retired ([PLAN-v1](../PLAN-v1.md) Phase 5).
@@ -153,6 +153,7 @@ Atlas never binds accounts by matching email or username claims, because those c
 - It then requires `auth_time` to be no older than `ATLAS_STEP_UP_MAX_AGE` (default 300 s).
 - Combined with an IdP policy of "admins must use passkey/MFA", this gives "fresh MFA" without Atlas handling credentials.
 - If a BYO IdP doesn't honour `max_age`, Atlas refuses `step_up` actions with a clear configuration error rather than silently skipping step-up.
+- The step-up login must return the same `sub` as the session's user: a different person who signed in on the same device is refused.
 
 ### Break-glass
 
@@ -182,7 +183,7 @@ These requirements come from how OIDC and passkeys work. Operators must plan for
 4. **Kanidm also requires TLS on its own listener.**
    - On first start, the `atlas-init` service generates a private internal CA and a certificate for the internal `idp` service name, stored under the secrets directory.
    - The bundled proxy re-encrypts to Kanidm and verifies that CA.
-   - Atlas's back-channel calls (discovery, token, JWKS, admin API) go to the internal URL and verify the same CA, while still validating `iss` against the public issuer.
+   - Atlas's back-channel calls (discovery, token, JWKS, admin API) go to the internal URL and verify the same CA, while still validating `iss` against the public issuer. Kanidm's discovery document advertises the public URL for every endpoint, so Atlas keeps the authorization endpoint and `iss` public (the browser uses them) and calls the token, JWKS, userinfo and revocation endpoints on the internal origin, with the same path.
    - Operators don't manage this certificate. It's rotated by re-running `atlas-init --rotate-idp-cert`.
    - *As built (Phase 5a):* the init step is the `atlas-idp-init` service (profile `bundled-idp`), which runs `atlas-admin init`. The certificate names `idp` (atlas-proxy's `proxy_ssl_name`) and `localhost` (Kanidm's own `healthcheck -v`), and `chain.pem` holds the certificate followed by the CA. The CA private key is mounted into no running service, and `--rotate-idp-cert` never rotates the CA ([SELF_HOSTING](../SELF_HOSTING.md#the-bundled-identity-provider)).
 5. **Client IPs.** Kanidm's own lockout and logging need the real client address. Configure it to trust forwarded-address headers **only** from the bundled proxy. The exact option name depends on the Kanidm version and is confirmed in the spike. The spike confirmed that the real client IP reaches Kanidm through the proxy. The configuration used:
@@ -266,9 +267,9 @@ With **BYO OIDC**, none of these Kanidm specifics apply. The operator's IdP just
 1. deletes the Atlas session;
 2. revokes the IdP tokens it holds (RFC 7009);
 3. if the IdP's discovery document advertises `end_session_endpoint` (BYO IdPs, or a future Kanidm), redirects there with `id_token_hint` and `post_logout_redirect_uri`;
-4. otherwise shows a logged-out page that says the user is **still signed in at the IdP** and links to the IdP's own sign-in page.
+4. otherwise shows a logged-out page that says the user is **still signed in at the IdP**. With the bundled IdP the page also links to the IdP's own logout, `GET <ATLAS_IDP_PUBLIC_URL>/ui/logout`. Checked in Phase 5c: it ends the Kanidm browser session and every token issued under it, it is not advertised in discovery, and it sends the browser to the IdP's own sign-in page, not back to Atlas. A compose test pins that behaviour, so a Kanidm upgrade that changes it is noticed. With a BYO IdP the page links to the IdP's own sign-in page.
 
-Interactive Atlas login sends `prompt=login` **by default**, with a setting to turn it off (its name is chosen in Phase 5). A lingering IdP session on a shared device therefore never silently signs the next person in to Atlas.
+Interactive Atlas login sends `prompt=login` **by default**, with a setting to turn it off (`ATLAS_OIDC_PROMPT_LOGIN`). A lingering IdP session on a shared device therefore never silently signs the next person in to Atlas. Checked in Phase 5c: with an IdP session, Kanidm answers `prompt=login` with a page "Reauthenticating as <that person>" (their password or second factor, and no way to choose another account), so the next person on a shared device has to sign out of the IdP first. That is why the logged-out page links to the IdP's logout.
 Known limitation: Immich may still reuse a lingering IdP session.
 
 Possible mitigation, **checked on Kanidm 1.12.0 (Phase 5b-4)**: the per-group account-policy setting `authsession_expiry` (class `account_policy`). Probed on a throwaway bundled stack and pinned by `tests/compose/test_idp_auth_expiry.py` with a 60 s value, through the real browser flow: the session cookie, then the authorisation endpoint `/ui/oauth2` that discovery advertises.
@@ -283,16 +284,29 @@ Possible mitigation, **checked on Kanidm 1.12.0 (Phase 5b-4)**: the per-group ac
   - *Checked on Kanidm 1.12.0 (Phase 5b-3a):* while `account_expire` is in the past, the person's existing Kanidm sessions are refused on their next request and a new login is denied. **Clearing `account_expire` makes those sessions valid again**, until they reach their own lifetime (86 400 s for a role group without its own session setting; 28 800 s for owner and admin). A **credential change ends them for good**: once the person commits a new password, second factor or passkey through a reset link (also while disabled), the old sessions stay refused after enabling. Nothing short of changing or removing the credential does this: the session attributes and any session route are refused to the console and to `idm_admin`.
   - So a temporary disable lets old Kanidm sessions revive on enable. When an account is disabled because it may be compromised, also issue a reset link, so that the person sets a new credential. (A console action that does both comes with Phase 8.)
   - A reset link cannot be revoked, and issuing a new one does not cancel an older one: each stays valid until it is used or expires (its lifetime is 5 minutes to 24 hours, 1 hour by default in Kanidm).
-- Atlas sessions also **re-validate with the IdP periodically** (refresh-token grant; a failure ends the session), so disables done outside Atlas take effect within that interval.
+- Atlas sessions also **re-validate with the IdP periodically** (a refresh-token grant, then userinfo with the new access token; a failure of either ends the session), so disables done outside Atlas take effect within that interval. The details are in [ADR-003 §4](003-internet-exposure.md#4-sessions-and-revocation).
+
+**Checked on Kanidm 1.12.0 for the relying party (Phase 5c probes).** Run on a throwaway bundled stack through `atlas-proxy`, with the back-channel on the internal URL:
+- **Discovery** has `revocation_endpoint`, `introspection_endpoint`, ES256 and PKCE S256, `client_secret_basic` and `client_secret_post`, and the scopes `openid`, `profile` and `groups`. It has no `end_session_endpoint`, no `prompt_values_supported` and no `claims_supported`. It is the same document through the proxy and on the internal URL, and every endpoint in it is on the public host.
+- **ID token:** ES256 with a `kid`. Claims: `iss` (public), `aud` and `azp` (`atlas`), `sub` (the person's UUID), `auth_time`, `iat`/`nbf`, `exp` (15 minutes after `iat`), `nonce`, `jti`, `name`, `preferred_username` and `groups`. No `amr`, `acr` or `email`. The access token is an ES256 JWT (`at+jwt`) of the same lifetime. Userinfo returns the same claims, and its `groups` is **current**: a role change shows in it at once, even for an access token issued before.
+- **`prompt=login`, `max_age=0`, and `max_age` smaller than the session's age** all show the re-authentication page, even for a session a second old. `max_age` larger than the age, and `prompt=none`, give a code at once. After re-authentication (`POST /ui/login/pw`, then `GET /ui/oauth2/resume`) the code's `auth_time` is fresh and `state` and `nonce` are intact.
+- **Revoking an access token or a refresh token revokes both.** The IdP browser session stays alive. A repeated revoke answers 200; revoking a string that is no token answers 401, so Atlas must not treat a failed revocation as an error.
+- **Refresh tokens rotate, and reusing an old one revokes the new one too** (the whole family). A refreshed ID token keeps the login's `auth_time`.
+- **Disable** (`account_expire` in the past): the IdP session is refused at once and the refresh grant answers 400. After the account is enabled again, the same refresh token works again. A deleted person: 400 and 401. A group's `authsession_expiry`: 200 from the grant with an access token that userinfo refuses (401) shortly after the expiry, then 400, as in Gap 5.
+- **Redirect URIs** are strict: another host, another path, a trailing slash, an extra query, `http`, a userinfo trick, `localhost` and an unknown client all give an error page with no `Location`, with or without a session.
+- **An authorization code can be exchanged twice** with the right verifier; a wrong or missing verifier is 400, and a wrong client secret is 401 and does not use the code up. So Atlas enforces single use of `state` itself.
+- **The consent page** ("Consent to Proceed to Atlas") shows once per person and client, not per session. `PATCH /v1/oauth2/atlas` with `oauth2_consent_prompt_enable` set to `false` switches it off: a person who never consented then gets a code at once, and an unregistered redirect URI is still refused.
+- `GET /ui/logout` ends the Kanidm browser session and every token issued under it (see Gap 5).
 
 **Other consequences for Phase 5:**
+- **Role mapping at login and re-validation.** Atlas finds the five role groups by UUID in `groups.json`, requires exactly one of them in the `groups` claim (and in userinfo), and requires it to equal the role it stores for the person. Anything else refuses the login or ends the session. With BYO this is not checked.
 - **Role-group invariant.** Every person is in exactly one role group that carries a credential policy. `idm_all_persons` is lowered to `any` only after the role groups exist, and the `kanidm` adapter refuses a person without a role group.
 - **Step-up never uses `amr`.** `amr`/`acr` are null in Kanidm's tokens, so step-up relies on `auth_time` plus the IdP's group policy.
 - **Groups by UUID.** The `groups` claim contains both UUIDs and names (including the built-in `idm_*` groups), so Atlas maps groups by UUID.
 - **Identity key.** Usernames arrive as `user@<idp-host>`. Atlas keys on `(issuer, sub)` as before; Kanidm's prefer-short-username setting is per client and can be set if a short name is needed for display.
 - **Reset links.** The CLI builds reset links from its internal URI, so Atlas builds them from `ATLAS_IDP_PUBLIC_URL`.
 - **Admin API quirks.** A GET for a deleted account returns `200 null`: treat it as not found. A weak password returns 422: show the reason to the user.
-- **UX notes:** TOTP is asked before the password; TOTP enrolment warns about authenticator apps that only support SHA1; the first login per client shows a consent page; a disabled account is refused at the username step, which reveals that it exists.
+- **UX notes:** TOTP is asked before the password; TOTP enrolment warns about authenticator apps that only support SHA1; the first login per client shows a consent page (Kanidm's, once per person; from Phase 5c the IdP bootstrap switches it off for the `atlas` client, and Immich's is unchanged); a disabled account is refused at the username step, which reveals that it exists.
 - **Operations:**
   - Kanidm backups are gzip, but restore needs a `.gz` file name.
   - Backup files are written 0644 and contain all secrets, so `atlas-backup` must write them 0600.

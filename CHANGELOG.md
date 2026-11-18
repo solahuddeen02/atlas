@@ -89,6 +89,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
 - With the bundled IdP, `ATLAS_ENV_FILES` for `atlas-api` ends with `/run/secrets/atlas-idp/idp.env`, so its client secret wins over one in `app.env`.
 - `httpx` is now a runtime dependency of the Atlas image (the Kanidm client uses it). It was a development dependency before.
 - The check that the pinned Kanidm digest still matches its tag moved out of the `compose` CI job into its own workflow (`kanidm-digest`). It runs when `deploy/docker-compose.yml` changes, weekly and on demand, retries registry errors, and is not a required check, so a Docker Hub rate limit no longer fails unrelated pull requests.
+- **Phase 5c design, documentation only** ([ADR-001](docs/adr/001-identity.md), [ADR-003](docs/adr/003-internet-exposure.md), [PLAN-v1](docs/PLAN-v1.md), [SELF_HOSTING](docs/SELF_HOSTING.md)): the relying party and session design, corrected after probes against the real Kanidm. Session lifetimes default to what the IdP allows (owner and admin 4 h / 8 h; adult, child and guest 12 h / 24 h) instead of 12 h / 7 d and 14 d / 30 d; guests use a password alone, as the bootstrap's role policy already sets; auth routes and the proxy's strict rate-limit zone are under `/api/v1/auth/*`; the logged-out page will link to the IdP's own logout; the `atlas` client's consent prompt will be switched off; `ATLAS_OIDC_INTERNAL_URL` and `ATLAS_OIDC_CA_FILE` in SELF_HOSTING are the existing `ATLAS_IDP_INTERNAL_URL` and `ATLAS_IDP_CA_FILE`. `bootstrap-owner`, break-glass, BYO linking and the `manual` adapter are 5d.
 - `atlas-api` and `atlas-proxy` are probed every second while they start (`start_period: 30s`, `start_interval: 1s`), so `docker compose up -d` reports a healthy stack about 8 seconds sooner. Their intervals, timeouts and retries are unchanged. This needs Docker Engine 25.0 or newer and Compose 2.20.2 or newer, which the `idp` service already needed.
 
 ### Fixed
@@ -125,6 +126,7 @@ There are no releases yet. This section covers PLAN Phases 0–4, Spike S, Phase
   - **new volume:** run `./install.sh` (or `docker volume create atlas_idp`) before `docker compose up -d`;
   - **new files:** `atlas-idp-init` creates `secrets/idp-ca/` (the internal CA: back it up with the other secrets), `secrets/idp/`, `secrets/idp-trust/`, `backups/idp-online/` and `backups/idp-restore/`;
   - `ATLAS_OIDC_CLIENT_SECRET` is written by the IdP bootstrap from Phase 5b-2b (see the next note).
+- **Phase 5c design (documentation only):** nothing to do.
 - **Faster start:** no action needed beyond `docker compose up -d`. Docker Engine 25.0 or newer and Compose 2.20.2 or newer are required (the bundled IdP already needed them; they are now stated in [SELF_HOSTING](docs/SELF_HOSTING.md#requirements)).
 - **If you run a pre-release checkout from before the identity adapter** (5b-3b), run `docker compose up -d` as usual:
   - **`atlas-api` is recreated** with one new read-only mount, `secrets/idp-trust/` (the IdP's public CA certificate). The directory already exists; nothing to create.

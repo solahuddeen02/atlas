@@ -76,56 +76,81 @@ Immich: its own stack and hostname. Uses OIDC against the IdP's public URL. Atla
 
 ### 2. Authentication strength by role
 
-The IdP's account policy enforces these minimums. With the bundled IdP, `atlas-init` configures them. With BYO, the operator does, and Atlas documents what's expected. Lifetimes are configurable; the defaults are:
+The IdP's account policy enforces these minimums. With the bundled IdP, the IdP bootstrap (`atlas-admin idp-bootstrap`) configures them. With BYO, the operator does, and Atlas documents what's expected. Lifetimes are configurable; the defaults are:
 
 | Role | Minimum credential | Session idle / absolute (defaults) |
 |---|---|---|
-| owner, admin | Passkey, or password + **TOTP** | 12 h / 7 d |
-| adult | Password + TOTP, or passkey | 14 d / 30 d |
-| child | Password (MFA encouraged), or passkey | 14 d / 30 d |
-| guest | Password + TOTP, or passkey | 1 d / until `expires_at` |
+| owner, admin | Passkey, or password + **TOTP** | 4 h / 8 h |
+| adult | Password + TOTP, or passkey | 12 h / 24 h |
+| child | Password (MFA encouraged), or passkey | 12 h / 24 h |
+| guest | Password (MFA encouraged), or passkey | 12 h / 24 h, and never past `expires_at` |
 
+- **The IdP caps these lifetimes.** Atlas re-validates each session with the IdP (see "Re-validation" below), so an Atlas session ends when the person's IdP session ends. Kanidm's session lasts 24 h, and the bundled IdP's role policy gives owner and admin 8 h. A longer value has no effect on Kanidm's side ([ADR-001, Gap 5](001-identity.md#workarounds-and-design-consequences), checked in Phase 5b-4). The defaults above are what the bundled IdP allows. With BYO the IdP's own session limits apply in the same way.
+- The credential minimums are the bundled IdP's role policy as built in Phase 5b: owner and admin `mfa`, adult `mfa`, child and guest `any` (a password alone, at least 15 characters). That guests need no second factor is the owner's decision (16 November 2026).
 - With the bundled IdP, Atlas keeps the person's IdP group in sync with their Atlas role.
-- Login is refused if the group and the role disagree, which avoids a "child" account that got admin MFA exemptions.
+- Login is refused if the group and the role disagree, which avoids a "child" account that got admin MFA exemptions. Atlas takes the five role-group UUIDs from `groups.json`, requires **exactly one** of them in the `groups` claim, and requires it to be the role Atlas stores for the person. The same check runs at every re-validation, and a mismatch ends the session. With BYO there is no such group list, so this check does not apply: keeping the IdP's groups consistent with Atlas roles is the operator's job.
 
 ### 3. Step-up authentication for admin actions
 
-- Permissions flagged `step_up` ([ADR-002](002-authorization.md) rule 6) require `strong_auth_at` to be newer than `ATLAS_STEP_UP_MAX_AGE` (default 300 s). Examples: user create/disable/reset, role and permission edits, module enable/disable, connector edits, revoking others' sessions.
+- Permissions flagged `step_up` ([ADR-002](002-authorization.md) rule 6) require the session's `auth_time` (the IdP's last verified authentication) to be newer than `ATLAS_STEP_UP_MAX_AGE` (default 300 s). Examples: user create/disable/reset, role and permission edits, module enable/disable, connector edits, revoking others' sessions.
 - Re-auth works like this:
   1. Atlas starts an OIDC request with `prompt=login`, `max_age=0`.
   2. It verifies the returned `auth_time`.
-  3. It updates `strong_auth_at`.
+  3. It updates the session's `auth_time`.
   4. It **rotates the session ID**.
 - Step-up is per session.
+- The re-authentication must return the **same `sub`** as the session's user. A different person who signed in on the same device is refused, not switched to.
+- Kanidm honours `prompt=login` and `max_age=0` each on its own (checked in Phase 5c): it shows its re-authentication page even for a session a second old, and the `auth_time` it then returns is fresh. Atlas sends both, because other IdPs differ.
 
 ### 4. Sessions and revocation
 
 **Storage:**
-- Server-side sessions in Postgres: `sessions(id_hash, user_id, created_at, last_seen_at, strong_auth_at, ip, user_agent, revoked_at)`.
-- The cookie carries a 256-bit random ID, and the DB stores only its SHA-256.
+- Server-side sessions in Postgres (`kernel.sessions`): `token_hash`, `user_id`, `auth_time`, `created_at`, `last_seen_at`, `idle_expires_at`, `absolute_expires_at`, `revoked_at` and `revoked_reason`, `client_ip`, `user_agent`, `csrf_token`, the IdP refresh token (encrypted, see "Login state and stored tokens") and the time of the next IdP re-validation.
+- `auth_time` is the IdP's last verified authentication time: login sets it and step-up updates it. It plays the part this ADR first called `strong_auth_at`.
+- The cookie carries a 256-bit random ID, and the DB stores only its SHA-256 (`token_hash`).
 
 **Cookie:**
 - `__Host-atlas_session`, with `Secure; HttpOnly; SameSite=Lax; Path=/`. No `Domain`.
+- Browsers refuse a `__Host-` cookie without `Secure`, so outside production (`ATLAS_ENV` is not `production`, plain HTTP) the cookie is named `atlas_session` and is not `Secure`. Production always uses the `__Host-` name.
 - Nothing auth-related goes in `localStorage`, which closes A4.
 
 **CSRF:**
 - Unsafe methods require `X-CSRF-Token` matching a per-session token (synchronizer pattern), on top of SameSite.
+- A request with an `Origin` header that does not match the public origin (`ATLAS_PUBLIC_URL`) is refused with 403 **even with a valid CSRF token**. A request without an `Origin` header is judged by the token alone.
 
 **Revocation:**
 - Users can list and end their own sessions.
 - Admins can end all sessions for a user.
-- Disabling a user, changing their role, or reaching a guest's `expires_at` ends all of that user's Atlas sessions immediately. Atlas can't revoke a person's IdP sessions (spike item 10). Disabling a user also sets the Kanidm `account_expire` (bundled IdP), which ends that person's IdP sessions and blocks new logins. Atlas sessions also re-validate with the IdP periodically, so disables done in the IdP take effect ([ADR-001, Gap 10](001-identity.md#workarounds-and-design-consequences)).
-- Logout deletes the session and revokes the IdP tokens. It uses the IdP's end-session endpoint only where discovery advertises one; otherwise the logged-out page says the user is still signed in at the IdP. Interactive login sends `prompt=login` by default ([ADR-001, Gap 5](001-identity.md#workarounds-and-design-consequences)).
+- Disabling a user, changing their role, or reaching a guest's `expires_at` ends all of that user's Atlas sessions immediately. Atlas can't revoke a person's IdP sessions (spike item 10). Disabling a user also sets the Kanidm `account_expire` (bundled IdP), which ends that person's IdP sessions and blocks new logins. Atlas sessions also re-validate with the IdP periodically (see "Re-validation" below), so disables done in the IdP take effect ([ADR-001, Gap 10](001-identity.md#workarounds-and-design-consequences)).
+- Logout deletes the session and revokes the IdP tokens. It uses the IdP's end-session endpoint only where discovery advertises one; otherwise the logged-out page says the user is still signed in at the IdP and, with the bundled IdP, links to the IdP's own logout (`/ui/logout` on `ATLAS_IDP_PUBLIC_URL`, a Kanidm page that ends its browser session; a compose test pins it). Interactive login sends `prompt=login` by default, which `ATLAS_OIDC_PROMPT_LOGIN` can turn off ([ADR-001, Gap 5](001-identity.md#workarounds-and-design-consequences)).
 - Every request checks the session row, so revocation is immediate. That closes A3.
 
 **Rotation:**
-- New session ID on login, on step-up and on role change.
+- New session ID on login, on step-up and on role change. Rotation replaces the stored hash of the same session row, so the old cookie stops working at once.
+
+**Re-validation (Phase 5c):**
+- Every `ATLAS_SESSION_REVALIDATE_INTERVAL` (default 300 s), on the next request of a session, Atlas refreshes its IdP token at the back-channel token endpoint, validates the new ID token, then asks the userinfo endpoint with the **new access token**. It requires `sub` unchanged and the role groups to match the stored role. A refresh grant that answers 200 is not enough: for a short time after a Kanidm session has expired the grant still answers 200, with an access token that userinfo refuses ([ADR-001, Gap 5](001-identity.md#workarounds-and-design-consequences), Phase 5b-4).
+- A refusal ends the Atlas session at once and the request gets 401: a refused grant, a userinfo refusal, a different `sub`, or a role mismatch.
+- Refreshes are serialized per session (a row lock), because Kanidm rotates the refresh token on every use and revokes the whole token family when an old one is used again.
+- If the IdP cannot be reached (timeout, 5xx), the session is kept and tried again after 30 s. After `ATLAS_SESSION_REVALIDATE_GRACE` (default 900 s) of failures the session ends: Atlas fails closed.
+
+**Login state and stored tokens (Phase 5c):**
+- A login in flight is a row in `kernel.login_attempts`: the SHA-256 of a 256-bit value kept in a short-lived `__Host-atlas_login` cookie, the SHA-256 of the `state`, the `nonce`, the PKCE verifier (encrypted), whether it is a login or a step-up (and for which session), the validated `next` path, and an expiry of 10 minutes. The callback consumes the row with a single `DELETE … RETURNING`, so a `state` and a callback work once. Kanidm itself accepts an authorization code twice (checked in Phase 5c), so this single use is Atlas's own.
+- `next` is a path inside Atlas. It must start with a single `/`, not `//` or `/\`, and have no scheme, no host, no backslash and no control characters. It is decoded once and checked again. Anything else is replaced by `/`.
+- Stored IdP tokens and the PKCE verifier are encrypted with AES-GCM under a key derived from `SECRET_KEY` with HKDF, with a separate label for each use (the stored refresh token, the PKCE verifier). Each encryption uses a random 96-bit nonce and the row's id as associated data, so a ciphertext cannot be moved to another row. `SECRET_KEY_PREVIOUS` only decrypts, and never encrypts. Rotating `SECRET_KEY` therefore ends the sessions it cannot read after `SECRET_KEY_PREVIOUS` is gone.
+- Only the refresh token is kept, because it is what re-validation and revocation need. (Revoking either token of a pair revokes both at Kanidm.) Access tokens, authorization codes and the client secret are never stored. An ID token is stored, encrypted, only when the IdP advertises an `end_session_endpoint`, as the `id_token_hint`.
+- **No authorization code, `state`, `nonce`, PKCE verifier or token** appears in a log line, an error message, a `repr` or a response body. The compose log check covers the new services' logs too.
+
+**Client address (Phase 5c):**
+- The app reads the client address from `X-Real-IP` only when the TCP peer is loopback or a private address (`ATLAS_API_TRUSTED_PEERS`; the bundled proxy overwrites that header, and no other host can reach the API).
+- The address is used for rate-limit keys and for the audit log **only**. It is never an input to an authorization decision: no role, permission, session or step-up check reads it.
 
 ### 5. Rate limiting (layered)
 
-1. **Edge (if your exposure option has one):** with Cloudflare, add rate-limit rules on the IdP's authentication endpoints and on Atlas `/api/auth/*`, and enable managed WAF rules. With your own proxy, add the equivalent (e.g. a Caddy/Traefik rate-limit plugin) if available.
-2. **Bundled proxy (always on):** `limit_req` keyed by the real client IP. There's a strict zone for `/api/auth/*` and step-up callbacks (`ATLAS_RATE_LIMIT_AUTH`, default 10 requests/min, small burst) and a general zone for `/api/*`. `client_max_body_size` comes from `ATLAS_MAX_BODY_SIZE`.
+1. **Edge (if your exposure option has one):** with Cloudflare, add rate-limit rules on the IdP's authentication endpoints and on Atlas `/api/v1/auth/*`, and enable managed WAF rules. With your own proxy, add the equivalent (e.g. a Caddy/Traefik rate-limit plugin) if available.
+2. **Bundled proxy (always on):** `limit_req` keyed by the real client IP. There's a strict zone for `/api/v1/auth/*` (and the earlier `/api/auth/*` path) and step-up callbacks (`ATLAS_RATE_LIMIT_AUTH`, default 10 requests/min, small burst) and a general zone for `/api/*`. `client_max_body_size` comes from `ATLAS_MAX_BODY_SIZE`.
 3. **App (always on):** a per-account and per-IP counter in Postgres for sensitive actions (auth callbacks, step-up, admin mutations, break-glass). It returns 429 with `Retry-After`.
+   - Phase 5c keeps these as fixed-window counters in `kernel.rate_limits`: per client address and per account for login and callbacks, and per user for step-up (`ATLAS_APP_RATE_AUTH_IP`, `ATLAS_APP_RATE_AUTH_ACCOUNT`).
    - Credential brute-force lockout belongs to the IdP, which Kanidm handles natively.
 
 ### 6. Cloudflare Access (only relevant to option 1)
@@ -188,7 +213,8 @@ The IdP's account policy enforces these minimums. With the bundled IdP, `atlas-i
   - disable user → all sessions gone;
   - rotation on login and step-up;
   - cookie flags.
-- CSRF: an unsafe request without the token gives 403.
+- CSRF: an unsafe request without the token gives 403, and one with a valid token but a foreign `Origin` gives 403.
+- `next`: the open-redirect cases (`//host`, `/\host`, a scheme, a host, a backslash, control characters, percent-encoded forms) fall back to `/`.
 - Rate limit: the N+1-th auth callback in a window gives 429.
 - Headers present on HTML and API responses.
 - Docs → 404 in production.

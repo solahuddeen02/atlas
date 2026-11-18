@@ -124,7 +124,7 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | Variable | Default | Meaning |
 |---|---|---|
 | `ATLAS_ENV` | `production` | `production`, `development` or `test`. Production enforces HTTPS URLs, `Secure` cookies, docs off and CORS off. **Leaving it unset means production** |
-| `SECRET_KEY` | *(generated)* | Signs sessions and CSRF tokens and derives internal keys. ≥ 32 random bytes. Placeholders are rejected. Rotating it signs everyone out |
+| `SECRET_KEY` | *(generated)* | Derives the keys that encrypt what Atlas stores for sessions (the IdP refresh token) and other internal keys. ≥ 32 random bytes. Placeholders are rejected. Rotating it signs everyone out, because stored tokens can no longer be read once `SECRET_KEY_PREVIOUS` is gone |
 | `SECRET_KEY_PREVIOUS` | *(unset)* | During rotation, the old key, accepted for verification only |
 | `DATABASE_URL` | *(generated)* | `postgresql+psycopg://atlas_app:…@postgres:5432/atlas`. The API's DML-only role |
 | `ATLAS_MIGRATOR_DATABASE_URL` | *(generated)* | Connection for the `atlas_migrator` role (DDL), used only by `atlas-migrate` |
@@ -132,16 +132,22 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | `ATLAS_OIDC_ISSUER` | bundled: `${ATLAS_IDP_PUBLIC_URL}/oauth2/openid/atlas` | OIDC issuer URL. Set it to your provider's issuer for BYO |
 | `ATLAS_OIDC_CLIENT_ID` | `atlas` | OIDC client ID. **With the bundled IdP leave it at `atlas`:** that is the name of the client the bootstrap creates |
 | `ATLAS_OIDC_CLIENT_SECRET` | bundled: *written by the IdP bootstrap* to `secrets/atlas-idp/idp.env`. BYO: set by hand | OIDC client secret. Required |
-| `ATLAS_OIDC_INTERNAL_URL` | bundled: `https://idp:8443` | Optional back-channel base URL for discovery, token and JWKS calls. `iss` is still validated against the public issuer |
-| `ATLAS_OIDC_CA_FILE` | bundled: the internal CA under the secrets dir | CA bundle for verifying `ATLAS_OIDC_INTERNAL_URL` |
 | `ATLAS_IDENTITY_ADMIN` | bundled: `kanidm`; BYO: `manual` | How the console manages identities. `kanidm` creates/resets people in the IdP. `manual` uses one-time link codes, and you manage credentials in your IdP |
 | `ATLAS_IDP_ADMIN_TOKEN` | bundled: *written by the IdP bootstrap* to `secrets/atlas-idp/idp.env` | Service-account token the console uses to call the IdP admin API. **Required with the bundled IdP** (`atlas-api` refuses to start without it; an install that has run the bootstrap already has it). Not used with BYO OIDC. [Rotate it](#rotating-the-console-token) with `--rotate-console-token` |
-| `ATLAS_IDP_INTERNAL_URL` | bundled: `https://idp:8443` | Where `atlas-api` reaches the bundled Kanidm on the Docker network. Every call is verified against `ATLAS_IDP_CA_FILE`. Links that people open always use `ATLAS_IDP_PUBLIC_URL`, never this. Rarely changed |
-| `ATLAS_IDP_CA_FILE` | `/run/secrets/idp-trust/ca.pem` | The IdP's internal CA certificate (public), mounted read-only from `secrets/idp-trust/`. Don't change it |
+| `ATLAS_IDP_INTERNAL_URL` | bundled: `https://idp:8443` | Where `atlas-api` reaches the bundled Kanidm on the Docker network. Every call is verified against `ATLAS_IDP_CA_FILE`. Links that people open always use `ATLAS_IDP_PUBLIC_URL`, never this. From Phase 5c the OIDC relying party also uses it for the token, JWKS, userinfo and revocation calls, and still validates `iss` against the public issuer. With BYO OIDC it is normally unset. Rarely changed |
+| `ATLAS_IDP_CA_FILE` | `/run/secrets/idp-trust/ca.pem` | The IdP's internal CA certificate (public), mounted read-only from `secrets/idp-trust/`. It verifies every back-channel call to the IdP. Don't change it |
 | `ATLAS_IDP_GROUPS_FILE` | `/run/secrets/atlas-idp/groups.json` | The group UUIDs the bootstrap wrote. Atlas finds its role groups by UUID from this file. Don't change it |
 | `ATLAS_IDP_BOOTSTRAP_RECORD` | `/run/secrets/atlas-idp/bootstrap.json` | Bundled IdP: the bootstrap's completion record. `atlas-api` refuses to start unless it says the last run completed ([details](#if-the-bootstrap-fails)). Don't change it |
-| `ATLAS_STEP_UP_MAX_AGE` | `300` | Seconds a re-authentication stays valid for admin actions |
-| `ATLAS_SESSION_IDLE_<ROLE>` / `ATLAS_SESSION_MAX_<ROLE>` | owner/admin `12h`/`7d`; adult and child `14d`/`30d`; guest `1d`/until expiry | Session idle and absolute lifetimes per role (`OWNER`, `ADMIN`, `ADULT`, `CHILD`, `GUEST`) |
+| `ATLAS_STEP_UP_MAX_AGE` | `300` | Seconds a re-authentication stays valid for admin actions (30 to 3600) |
+| `ATLAS_SESSION_IDLE_<ROLE>` / `ATLAS_SESSION_MAX_<ROLE>` | owner/admin `4h`/`8h`; adult, child and guest `12h`/`24h`; a guest's session also never outlasts the guest's expiry | Session idle and absolute lifetimes per role (`OWNER`, `ADMIN`, `ADULT`, `CHILD`, `GUEST`). Forms like `30m`, `12h`, `7d`; idle must not exceed the maximum; 5 minutes to 90 days. **The IdP caps them:** [Sessions and logout](#sessions-and-logout-phase-5c) |
+| `ATLAS_OIDC_PROMPT_LOGIN` | `true` | Send `prompt=login` on an interactive login, so a lingering IdP session on a shared device never signs the next person in without asking. `false` turns it off |
+| `ATLAS_OIDC_SCOPES` | bundled: `openid profile groups`; BYO: `openid profile` | Scopes Atlas asks for. Must contain `openid`. With the bundled IdP leave it alone: the `groups` scope is how Atlas checks a person's role |
+| `ATLAS_SESSION_REVALIDATE_INTERVAL` | `300` | Seconds between an Atlas session's checks with the IdP (5 to 3600). A person disabled in the IdP loses their Atlas session within this time |
+| `ATLAS_SESSION_REVALIDATE_GRACE` | `900` | Seconds the IdP may be unreachable before Atlas sessions end (at least the interval). Until then sessions continue |
+| `ATLAS_APP_RATE_AUTH_IP` / `ATLAS_APP_RATE_AUTH_ACCOUNT` | `20r/m` / `10r/m` | Atlas's own limits on logins and callbacks, per client address and per account (`Nr/s` or `Nr/m`), on top of the proxy's |
+| `ATLAS_API_TRUSTED_PEERS` | loopback and private address ranges | Peers whose `X-Real-IP` the API believes (only the bundled proxy can reach it). The address is used for rate limits and the audit log, never to decide what someone may do |
+
+The settings for sessions, `ATLAS_OIDC_*` login and the app-level limits above are read from Phase 5c on.
 | `ATLAS_MODULES` | `hello,immich` (Foundation) | Installed modules to load. Enabling them happens in the admin console |
 | `ATLAS_MODULE_<ID>_*` | per module | Non-secret module settings, documented by each module |
 | `ATLAS_CONNECTOR_<NAME>_*` | *(unset)* | Connector secrets referenced by name from the console, e.g. `ATLAS_CONNECTOR_IMMICH_API_KEY`. Put them in `${ATLAS_SECRETS_DIR}/atlas/connectors.env` |
@@ -150,6 +156,14 @@ These are normally left at their defaults or generated. Secrets live in `${ATLAS
 | `ATLAS_DEV_CORS_ORIGINS` | *(empty)* | Development only: comma-separated origins allowed by CORS (e.g. a Vite dev server). Ignored in production |
 
 The Postgres container reads its superuser password from `${ATLAS_SECRETS_DIR}/postgres/password` through the image's `POSTGRES_PASSWORD_FILE` variable. Atlas never uses the superuser at runtime.
+
+### Sessions and logout (Phase 5c)
+
+**The IdP caps session lifetimes.** Atlas checks every session with the identity provider every `ATLAS_SESSION_REVALIDATE_INTERVAL`, so an Atlas session ends when the person's session at the IdP ends. With the bundled IdP that is after 24 hours, and after 8 hours for owner and admin (set by the bootstrap), and Kanidm gives no longer session whatever the group says. A larger `ATLAS_SESSION_MAX_<ROLE>` therefore changes nothing. The defaults are what the bundled IdP allows. A BYO IdP has its own limits, which apply in the same way.
+
+**Logging out** ends the Atlas session and revokes Atlas's tokens at the IdP, but with the bundled IdP the person stays signed in *at the IdP* (Kanidm has no end-session endpoint to send them to). The logged-out page says so and links to the IdP's own logout, `ATLAS_IDP_PUBLIC_URL/ui/logout`, which also ends the IdP session, and with it any Immich sign-in that reuses it. On a **shared device** that link matters: if the first person stays signed in at the IdP, the next person who tries to sign in to Atlas sees "Reauthenticating as" the first person, with no way to choose another account, until the IdP session is ended.
+
+**What a login needs.** An Atlas user must already exist for the person's IdP identity, with a role that matches the person's IdP role group (bundled IdP). A login from an unknown identity, a disabled user or an expired guest is refused with a generic message. Until Phase 5d, the first user cannot be created by an installer.
 
 ## Volumes and files
 
@@ -205,7 +219,7 @@ ingress:
 ```
 
 **Recommended Cloudflare settings:**
-- **Rate-limiting rules** on `id.example.com` (login paths) and `atlas.example.com/api/auth/*`.
+- **Rate-limiting rules** on `id.example.com` (login paths) and `atlas.example.com/api/v1/auth/*`.
 - Managed WAF rules on.
 - **Cloudflare Access on admin paths only.** Create an Access application for `atlas.example.com/admin*` and `atlas.example.com/api/v1/admin/*`, with a policy allowing only your owner/admin identities.
 - **Don't** put Access in front of the rest of Atlas, the IdP or Immich: it breaks the Immich mobile app and OIDC back-channel calls, and it adds a second login for everyone.
@@ -427,13 +441,14 @@ If you already run Authentik, Keycloak, Kanidm, Authelia, Pocket ID or similar:
    - redirect URI `https://atlas.example.com/api/v1/auth/callback`;
    - scopes `openid profile`;
    - PKCE S256 enabled.
-3. Put `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_SECRET` in `secrets/atlas/app.env`. `ATLAS_IDENTITY_ADMIN` defaults to `manual`.
+3. Put `ATLAS_OIDC_ISSUER`, `ATLAS_OIDC_CLIENT_ID` and `ATLAS_OIDC_CLIENT_SECRET` in `secrets/atlas/app.env`. `ATLAS_IDENTITY_ADMIN` defaults to `manual`, and `ATLAS_OIDC_SCOPES` to `openid profile`.
 4. Run `docker compose up -d`, then `atlas-admin bootstrap-owner`. It prints a **link code** URL; open it and sign in at your IdP to bind your account.
 
 **What changes with BYO:**
 - You create identities and reset credentials in your IdP.
 - In the Atlas console, admins create the Atlas user (role, modules) and hand out a one-time link code.
 - Atlas never matches accounts by email or username.
+- Atlas cannot check that a person's groups at your IdP match their Atlas role (that check needs the bundled IdP's group list), so keeping them consistent is up to you.
 
 **Requirements on your IdP:**
 - It must honour `prompt=login` / `max_age` and return `auth_time`. Without them, admin actions that need step-up are refused.
