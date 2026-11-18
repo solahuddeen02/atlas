@@ -3,7 +3,9 @@
 import hashlib
 import logging
 import pickle
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -20,6 +22,8 @@ from atlas.kernel.identity.admin import Role
 from atlas.kernel.identity.sessions import (
     TOKEN_RE,
     IssuedSession,
+    Revocation,
+    RevokedToken,
     SessionRefused,
     SessionStore,
     SessionToken,
@@ -262,9 +266,9 @@ def test_a_revoked_session_is_gone_on_the_next_request(
     issued = issue(store, make_user(), clock)
     token = issued.token.reveal()
     assert store.lookup(token) is not None
-    assert store.revoke(issued.session.id, "admin") is True
+    assert store.revoke(issued.session.id, "admin").ended == 1
     assert store.lookup(token) is None
-    assert store.revoke(issued.session.id, "admin") is False  # already ended
+    assert store.revoke(issued.session.id, "admin").ended == 0  # already ended
     row = row_of(app_engine, issued.session.id)
     assert row["revoked_reason"] == "admin" and row["revoked_at"] == clock.now
 
@@ -273,10 +277,10 @@ def test_logout_revokes_by_cookie_value(
     store: SessionStore, make_user: MakeUser, clock: FrozenClock
 ) -> None:
     token = issue(store, make_user(), clock).token.reveal()
-    assert store.revoke_token(token, "logout") is True
+    assert store.revoke_token(token, "logout").ended == 1
     assert store.lookup(token) is None
-    assert store.revoke_token(token, "logout") is False
-    assert store.revoke_token("not a token", "logout") is False
+    assert store.revoke_token(token, "logout").ended == 0
+    assert store.revoke_token("not a token", "logout").ended == 0
 
 
 def test_a_reason_must_be_one_the_database_knows(
@@ -396,27 +400,31 @@ def test_all_of_a_persons_sessions_end_and_nobody_elses(
     b1 = issue(store, bob, clock)
     gone = issue(store, alice, clock)
     store.revoke(gone.session.id, "logout")
-    assert store.end_user_sessions(alice, "role_changed") == 2  # the revoked one is not counted
+    assert store.end_user_sessions(alice, "role_changed").ended == 2  # not the revoked one
     assert store.lookup(a1.token.reveal()) is None and store.lookup(a2.token.reveal()) is None
     assert store.lookup(b1.token.reveal()) is not None
-    assert store.end_user_sessions(alice, "role_changed") == 0
+    assert store.end_user_sessions(alice, "role_changed").ended == 0
 
 
 def test_the_revocation_commits_with_the_change_or_not_at_all(
-    store: SessionStore, app_engine: Engine, make_user: MakeUser, clock: FrozenClock
+    store: SessionStore,
+    app_engine: Engine,
+    box: TokenBox,
+    make_user: MakeUser,
+    clock: FrozenClock,
 ) -> None:
     user = make_user()
     token = issue(store, user, clock).token.reveal()
 
     with pytest.raises(RuntimeError, match="boom"), UnitOfWork(app_engine) as db:
         db.execute(text("UPDATE kernel.users SET status = 'disabled' WHERE id = :u"), {"u": user})
-        end_user_sessions(db, user, "disabled", now=clock.now)
+        end_user_sessions(db, user, "disabled", box=box, now=clock.now)
         raise RuntimeError("boom")
     assert store.lookup(token) is not None  # rolled back together: still signed in, still active
 
     with UnitOfWork(app_engine) as db:
         db.execute(text("UPDATE kernel.users SET status = 'disabled' WHERE id = :u"), {"u": user})
-        assert end_user_sessions(db, user, "disabled", now=clock.now) == 1
+        assert end_user_sessions(db, user, "disabled", box=box, now=clock.now).ended == 1
     assert store.lookup(token) is None
 
 
@@ -620,3 +628,200 @@ def test_the_address_and_the_user_agent_are_stored_cleaned(
         issued = issue(store, user, clock, client_ip=junk, user_agent="")
         row = row_of(app_engine, issued.session.id)
         assert row["client_ip"] is None and row["user_agent"] is None
+
+
+# --- a revoked session keeps no IdP token, and hands it back (R1) ---------------------------------
+
+OTHER = "another-refresh-token-9876543210zyxwvutsrqponm"
+
+
+def test_ending_a_session_clears_its_token_in_the_same_statement(
+    store: SessionStore, app_engine: Engine, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    issued = issue(store, make_user(), clock, refresh_token=SecretStr(REFRESH))
+    assert row_of(app_engine, issued.session.id)["idp_tokens_enc"] is not None
+    with counting(app_engine) as statements:
+        revocation = store.revoke(issued.session.id, "admin")
+    assert len(statements) == 1  # one statement: the CTE reads the token, the UPDATE clears it
+    assert statements[0].lstrip().upper().startswith("WITH")
+    assert "UPDATE kernel.sessions" in statements[0] and "idp_tokens_enc" in statements[0]
+    row = row_of(app_engine, issued.session.id)
+    assert row["idp_tokens_enc"] is None
+    assert row["revoked_at"] == clock.now and row["revoked_reason"] == "admin"
+    assert revocation.ended == 1
+    (token,) = revocation.tokens
+    assert token.session_id == issued.session.id
+    assert isinstance(token.refresh_token, SecretStr)
+    assert token.refresh_token.get_secret_value() == REFRESH
+
+
+@pytest.mark.parametrize(
+    "kind", ["revoke", "revoke_token", "end_user_sessions", "in_a_transaction", "replaced_by_login"]
+)
+def test_after_each_kind_of_revocation_the_row_holds_no_token(
+    store: SessionStore,
+    app_engine: Engine,
+    box: TokenBox,
+    make_user: MakeUser,
+    clock: FrozenClock,
+    kind: str,
+) -> None:
+    user = make_user()
+    first = issue(store, user, clock, refresh_token=SecretStr(REFRESH))
+    expected = {first.session.id: REFRESH}
+    survivor: IssuedSession | None = None
+    if kind == "revoke":
+        result = store.revoke(first.session.id, "admin")
+    elif kind == "revoke_token":
+        result = store.revoke_token(first.token.reveal(), "logout")
+    elif kind == "replaced_by_login":
+        survivor = issue(
+            store, user, clock, replaces=first.token.reveal(), refresh_token=SecretStr(OTHER)
+        )
+        result = survivor.replaced
+    else:
+        second = issue(store, user, clock, refresh_token=SecretStr(OTHER))
+        expected[second.session.id] = OTHER
+        if kind == "end_user_sessions":
+            result = store.end_user_sessions(user, "disabled")
+        else:
+            with UnitOfWork(app_engine) as db:
+                result = end_user_sessions(db, user, "disabled", box=box, now=clock.now)
+
+    # What came back is exactly what was stored, per session...
+    assert result.ended == len(expected)
+    assert {t.session_id: t.refresh_token.get_secret_value() for t in result.tokens} == expected
+    # ...and the rows hold nothing of it any more.
+    for session_id in expected:
+        row = row_of(app_engine, session_id)
+        assert row["idp_tokens_enc"] is None and row["revoked_at"] is not None
+        assert store.take_refresh_token(session_id) is None
+    for plain in expected.values():
+        assert plain not in all_text_of_table(app_engine, "sessions")
+    if survivor is not None:  # the new session of a login keeps its own token
+        assert row_of(app_engine, survivor.session.id)["idp_tokens_enc"] is not None
+        assert survivor.session.id not in expected
+
+
+def test_a_token_is_handed_back_once(
+    store: SessionStore, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    issued = issue(store, make_user(), clock, refresh_token=SecretStr(REFRESH))
+    assert len(store.revoke(issued.session.id, "user").tokens) == 1
+    again = store.revoke(issued.session.id, "user")
+    assert (again.ended, again.tokens) == (0, ())
+    assert store.revoke_token(issued.token.reveal(), "user").tokens == ()
+    assert store.end_user_sessions(issued.session.user_id, "user").tokens == ()
+
+
+def test_a_session_without_a_token_is_ended_with_nothing_to_hand_back(
+    store: SessionStore, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    issued = issue(store, make_user(), clock)
+    result = store.revoke(issued.session.id, "user")
+    assert (result.ended, result.tokens) == (1, ())
+
+
+def test_only_the_persons_own_sessions_are_touched(
+    store: SessionStore, app_engine: Engine, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    alice, bob = make_user(), make_user()
+    issue(store, alice, clock, refresh_token=SecretStr(REFRESH))
+    bobs = issue(store, bob, clock, refresh_token=SecretStr(OTHER))
+    result = store.end_user_sessions(alice, "role_changed")
+    assert [t.refresh_token.get_secret_value() for t in result.tokens] == [REFRESH]
+    assert row_of(app_engine, bobs.session.id)["idp_tokens_enc"] is not None
+    assert store.lookup(bobs.token.reveal()) is not None
+
+
+def test_the_clearing_is_rolled_back_with_the_callers_transaction(
+    store: SessionStore, app_engine: Engine, box: TokenBox, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    issued = issue(store, make_user(), clock, refresh_token=SecretStr(REFRESH))
+    with pytest.raises(RuntimeError, match="boom"), UnitOfWork(app_engine) as db:
+        end_user_sessions(db, issued.session.user_id, "disabled", box=box, now=clock.now)
+        raise RuntimeError("boom")
+    row = row_of(app_engine, issued.session.id)
+    assert row["idp_tokens_enc"] is not None and row["revoked_at"] is None  # nothing happened
+    taken = store.take_refresh_token(issued.session.id)
+    assert taken is not None and taken.get_secret_value() == REFRESH
+
+
+def test_a_token_that_cannot_be_read_is_cleared_all_the_same(
+    app_engine: Engine,
+    make_user: MakeUser,
+    clock: FrozenClock,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    user = make_user()
+    old = SessionStore(app_engine, settings.session_lifetimes, TokenBox(OLD_KEY), clock=clock)
+    issued = issue(old, user, clock, refresh_token=SecretStr(REFRESH))
+    current = SessionStore(
+        app_engine, settings.session_lifetimes, TokenBox(settings.secret_key), clock=clock
+    )
+    with caplog.at_level(logging.DEBUG):
+        result = current.revoke(issued.session.id, "admin")
+    assert (result.ended, result.tokens) == (1, ())  # ended, and nothing to hand back
+    assert row_of(app_engine, issued.session.id)["idp_tokens_enc"] is None
+    assert "could not be read" in caplog.text and REFRESH not in caplog.text
+    # With the previous key configured the same session would have handed it back.
+    other = issue(old, user, clock, refresh_token=SecretStr(OTHER))
+    rotated = SessionStore(
+        app_engine,
+        settings.session_lifetimes,
+        TokenBox(settings.secret_key, previous=OLD_KEY),
+        clock=clock,
+    )
+    (token,) = rotated.revoke(other.session.id, "admin").tokens
+    assert token.refresh_token.get_secret_value() == OTHER
+
+
+def test_parallel_revocations_hand_a_token_back_exactly_once(
+    store: SessionStore, make_user: MakeUser, clock: FrozenClock
+) -> None:
+    issued = issue(store, make_user(), clock, refresh_token=SecretStr(REFRESH))
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def revoke(_: int) -> Revocation:
+        barrier.wait()
+        return store.revoke(issued.session.id, "user")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(revoke, range(workers)))
+    assert sum(r.ended for r in results) == 1
+    tokens = [t for r in results for t in r.tokens]
+    assert [t.refresh_token.get_secret_value() for t in tokens] == [REFRESH]
+
+
+def test_nothing_of_a_returned_token_is_logged_or_shown(
+    store: SessionStore,
+    make_user: MakeUser,
+    clock: FrozenClock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    user = make_user()
+    with caplog.at_level(logging.DEBUG):
+        a = issue(store, user, clock, refresh_token=SecretStr(REFRESH))
+        b = issue(store, user, clock, refresh_token=SecretStr(OTHER))
+        c = issue(
+            store, user, clock, refresh_token=SecretStr("third-refresh-token-abcdefghij0123456789")
+        )
+        results = [
+            store.revoke(a.session.id, "admin"),
+            store.revoke_token(b.token.reveal(), "logout"),
+            store.end_user_sessions(user, "disabled"),
+        ]
+        replaced = issue(store, user, clock, replaces=c.token.reveal())
+    for result in [*results, replaced.replaced]:
+        for obj in (result, *result.tokens):
+            for text_ in (repr(obj), str(obj), f"{obj}", f"{obj!r}"):
+                assert REFRESH not in text_ and OTHER not in text_
+        for token in result.tokens:
+            assert "redacted" in repr(token)
+            with pytest.raises(TypeError, match="not serialised"):
+                pickle.dumps(token)
+    assert isinstance(results[0].tokens[0], RevokedToken)
+    for secret in (REFRESH, OTHER, "third-refresh-token-abcdefghij0123456789"):
+        assert secret not in caplog.text

@@ -14,6 +14,13 @@ Disabling a person, changing their role and a guest's expiry end their sessions 
 `end_user_sessions`, which can run inside the caller's own transaction so that the change
 and the revocation commit together.
 
+**A revoked session keeps no IdP token.** Kanidm revives a refresh token when an account is
+enabled again, so a revoked row must not hold one. Every way of ending a session (`revoke`,
+`revoke_token`, `end_user_sessions`, and `create(replaces=...)`) sets `revoked_at` and clears
+`idp_tokens_enc` in the same statement, and hands back what it cleared as a `Revocation`
+(session id and the decrypted refresh token). The caller revokes those tokens at the IdP
+after its own commit (Phase 5c-3).
+
 Nothing here puts a token, a CSRF token or a stored IdP token in a log line, an error or a
 `repr`: `Session` and `SessionToken` show only ids and the role.
 """
@@ -35,6 +42,7 @@ from pydantic import SecretStr
 from sqlalchemy import Connection, Engine, Result, Row, Select, delete, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from atlas.kernel.config import SessionLifetimes
 from atlas.kernel.db.ids import uuid7
@@ -130,11 +138,54 @@ class Session:
 
 
 @dataclass(frozen=True, repr=False)
+class RevokedToken:
+    """The IdP refresh token a revoked session held, to be revoked at the IdP. Redacted."""
+
+    session_id: UUID
+    refresh_token: SecretStr
+
+    def __repr__(self) -> str:
+        return f"RevokedToken(session_id={self.session_id}, refresh_token=<redacted>)"
+
+    __str__ = __repr__
+
+    def __format__(self, spec: str) -> str:
+        return format(repr(self), spec)
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("a RevokedToken is not serialised")
+
+
+@dataclass(frozen=True, repr=False)
+class Revocation:
+    """What ending sessions did: how many it ended, and the IdP tokens it cleared.
+
+    `tokens` has an entry for each ended session that held a token Atlas could read. The
+    rows no longer hold them, so these are the only copy: revoke them at the IdP.
+    """
+
+    ended: int
+    tokens: tuple[RevokedToken, ...] = ()
+
+    def __repr__(self) -> str:
+        return f"Revocation(ended={self.ended}, tokens={len(self.tokens)})"
+
+    __str__ = __repr__
+
+    def __format__(self, spec: str) -> str:
+        return format(repr(self), spec)
+
+
+@dataclass(frozen=True, repr=False)
 class IssuedSession:
-    """A new (or rotated) session and the cookie value that goes with it."""
+    """A new (or rotated) session and the cookie value that goes with it.
+
+    `replaced` is what ending the browser's previous session (`create(replaces=...)`) cleared.
+    """
 
     session: Session
     token: SessionToken
+    replaced: Revocation = field(default_factory=lambda: Revocation(0))
 
     def __repr__(self) -> str:
         return f"IssuedSession({self.session!r}, token=<redacted>)"
@@ -184,22 +235,62 @@ def _check_reason(reason: str) -> None:
         raise ValueError(f"unknown revoke reason: {reason!r}")
 
 
+def _revoke(
+    db: DbSession | Connection,
+    where: ColumnElement[bool],
+    reason: str,
+    now: datetime,
+    box: TokenBox,
+) -> Revocation:
+    """End the live sessions matching `where`, in ONE statement that also clears their tokens.
+
+    A CTE locks and reads the rows (with the token as it was), the UPDATE sets `revoked_at`,
+    the reason and `idp_tokens_enc = NULL`, and RETURNING hands back the old token. A token
+    Atlas cannot read (a `SECRET_KEY` that no longer opens it) is cleared all the same and is
+    simply not returned.
+    """
+    _check_reason(reason)
+    old = (
+        select(sessions.c.id, sessions.c.idp_tokens_enc.label("old_tokens"))
+        .where(where, sessions.c.revoked_at.is_(None))
+        .with_for_update()
+        .cte("old")
+    )
+    rows = db.execute(
+        update(sessions)
+        .where(sessions.c.id == old.c.id)
+        .values(revoked_at=now, revoked_reason=reason, idp_tokens_enc=None)
+        .returning(sessions.c.id, old.c.old_tokens)
+    ).all()
+    tokens: list[RevokedToken] = []
+    for row in rows:
+        if row.old_tokens is None:
+            continue
+        try:
+            plain = box.open(Purpose.REFRESH_TOKEN, row.id, bytes(row.old_tokens))
+        except TokenBoxError:
+            logger.warning("a stored IdP token could not be read for session %s", row.id)
+            continue
+        tokens.append(RevokedToken(session_id=row.id, refresh_token=SecretStr(plain.decode())))
+    return Revocation(ended=len(rows), tokens=tuple(tokens))
+
+
 def end_user_sessions(
-    db: DbSession | Connection, user_id: UUID, reason: str, *, now: datetime | None = None
-) -> int:
-    """End every live session of `user_id`. Returns how many it ended.
+    db: DbSession | Connection,
+    user_id: UUID,
+    reason: str,
+    *,
+    box: TokenBox,
+    now: datetime | None = None,
+) -> Revocation:
+    """End every live session of `user_id`. Returns how many it ended and the tokens it cleared.
 
     `db` is the caller's own transaction, so that the change that makes this necessary (the
     person is disabled, their role changes, a guest's time is up) and the revocation commit
-    together, or not at all.
+    together, or not at all. The caller revokes the returned tokens at the IdP once it has
+    committed.
     """
-    _check_reason(reason)
-    result = db.execute(
-        update(sessions)
-        .where(sessions.c.user_id == user_id, sessions.c.revoked_at.is_(None))
-        .values(revoked_at=now or _utc_now(), revoked_reason=reason)
-    )
-    return _rows(result)
+    return _revoke(db, sessions.c.user_id == user_id, reason, now or _utc_now(), box)
 
 
 def _joined_select() -> Select[Any]:
@@ -370,14 +461,10 @@ class SessionStore:
                 if refresh_token is not None
                 else None
             )
+            replaced = Revocation(0)
             if replaces is not None and TOKEN_RE.fullmatch(replaces):
-                db.execute(
-                    update(sessions)
-                    .where(
-                        sessions.c.token_hash == hash_token(replaces),
-                        sessions.c.revoked_at.is_(None),
-                    )
-                    .values(revoked_at=now, revoked_reason="replaced")
+                replaced = _revoke(
+                    db, sessions.c.token_hash == hash_token(replaces), "replaced", now, self._box
                 )
             db.execute(
                 sessions.insert().values(
@@ -409,7 +496,7 @@ class SessionStore:
             absolute_expires_at=absolute,
             csrf_token=csrf,
         )
-        return IssuedSession(session=session, token=SessionToken(token))
+        return IssuedSession(session=session, token=SessionToken(token), replaced=replaced)
 
     def rotate(
         self, session_id: UUID, *, auth_time: datetime | None = None
@@ -440,37 +527,28 @@ class SessionStore:
             return None
         return IssuedSession(session=_to_session(row, role), token=SessionToken(token))
 
-    def revoke(self, session_id: UUID, reason: str) -> bool:
-        """End one session. False if it was already ended or does not exist."""
+    def revoke(self, session_id: UUID, reason: str) -> Revocation:
+        """End one session and clear its IdP token. `ended` is 0 if it was already over."""
         _check_reason(reason)
         with UnitOfWork(self._engine) as db:
-            result = db.execute(
-                update(sessions)
-                .where(sessions.c.id == session_id, sessions.c.revoked_at.is_(None))
-                .values(revoked_at=self._clock(), revoked_reason=reason)
-            )
-        return _rows(result) > 0
+            return _revoke(db, sessions.c.id == session_id, reason, self._clock(), self._box)
 
-    def revoke_token(self, token: str, reason: str) -> bool:
-        """End the session a cookie value belongs to (logout). False if there is none."""
+    def revoke_token(self, token: str, reason: str) -> Revocation:
+        """End the session a cookie value belongs to (logout). `ended` is 0 if there is none."""
         _check_reason(reason)
         if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
-            return False
+            return Revocation(0)
+        where = sessions.c.token_hash == hash_token(token)
         with UnitOfWork(self._engine) as db:
-            result = db.execute(
-                update(sessions)
-                .where(sessions.c.token_hash == hash_token(token), sessions.c.revoked_at.is_(None))
-                .values(revoked_at=self._clock(), revoked_reason=reason)
-            )
-        return _rows(result) > 0
+            return _revoke(db, where, reason, self._clock(), self._box)
 
-    def end_user_sessions(self, user_id: UUID, reason: str) -> int:
+    def end_user_sessions(self, user_id: UUID, reason: str) -> Revocation:
         """End all of a person's sessions in their own transaction. See the module function."""
         with UnitOfWork(self._engine) as db:
-            count = end_user_sessions(db, user_id, reason, now=self._clock())
-        if count:
-            logger.info("ended %d session(s) of user %s (%s)", count, user_id, reason)
-        return count
+            revocation = end_user_sessions(db, user_id, reason, box=self._box, now=self._clock())
+        if revocation.ended:
+            logger.info("ended %d session(s) of user %s (%s)", revocation.ended, user_id, reason)
+        return revocation
 
     def take_refresh_token(self, session_id: UUID) -> SecretStr | None:
         """The stored IdP refresh token of a session, removed from the row as it is read.
