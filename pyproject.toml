@@ -37,7 +37,7 @@ dev = [
     "pytest>=8.3",
     "pyyaml>=6.0",
     "ruff>=0.17.4",
-    "types-pyyaml>=6.0.12.20261103",
+    "types-pyyaml>=6.0.12.20261113",
 ]
 
 [tool.pytest.ini_options]
